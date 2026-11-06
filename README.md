@@ -8,23 +8,24 @@ and those agents can **message each other**.
 > battle-tested. Issues and PRs welcome.
 
 ```
- coban                          │
-                                │   (the focused agent's real terminal)
-▌● 1 ★ orkestra                 │
-     Claude H1   çalışıyor      │
- ! 2 h2                         │
-     Claude H2   izin bekliyor  │
- ○ 3 codex                     ✓│
-     Codex       boşta          │
- ─ mesajlar ───────────────     │
- h2→orkestra                    │
-  API şemasını değiştirdim      │
+                  ╔═1═════════════════╗
+                  ║    ORKESTRATÖR    ║
+                  ║  ● Claude · H1    ║
+                  ╚═════════╤═════════╝
+   ┏━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━┓
+╭─2─────────┸─────╮ ╭─3─────────┸──────────╮   ╭┄┄┄┸┄┄╮
+│      ○ h2 ✓     │ │         ! h3         │   ┆  +   ┆
+│ Claude H2·boşta │ │ Claude H3 · izin bek.│   ┆ işçi ┆
+╰─────────────────╯ ╰──────────────────────╯   ╰┄┄┄┄┄┄╯
+─ ● orkestra · Claude H1 · çalışıyor ─────────────────────
+  (the focused agent's real terminal: Claude Code, Codex, …)
 ```
 
 ## How it works
 
-- `coban` opens a TUI and starts the **orchestrator** (default: profile `h1`) with a system prompt that teaches it
-  the `coban` CLI.
+- `coban` opens a TUI with an agent **graph** on top and the focused agent's terminal below. Click the `+` bubble
+  (or press Enter) to pick the **orchestrator**'s profile; it starts with a system prompt that teaches it the
+  `coban` CLI. Workers appear as bubbles wired to it — click one to switch the terminal to it.
 - Every agent runs in its own PTY; coban emulates its screen (xterm) and infers a status from it:
   `working`, `blocked` (waiting for a permission), `limited` (usage limit), `idle`, `exited`.
 - Agents coordinate through the **`coban` CLI over a unix socket** — no MCP server needed. Anything that can run a
@@ -69,13 +70,17 @@ accounts are just different `CLAUDE_CONFIG_DIR`s:
 
 ## Keys
 
-`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `u` next unread ·
+Mouse: click a bubble to focus it, click `+` to add an agent. Mouse events inside the terminal area are forwarded
+when the agent asks for them.
+
+`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `u` next unread ·
 `x` close agent · `q` quit · `ctrl+b` send a literal ctrl+b.
 
 ## Known gaps
 
-No mouse/scrollback, no split view, no kitty keyboard protocol (shift+enter), no session restore. Codex's sandbox
-may block the unix socket. Status detection is screen heuristics and may need tuning per CLI version.
+No scrollback, no split view, no kitty keyboard protocol (shift+enter), no session restore. Codex's sandbox
+may block the unix socket. Status detection is screen heuristics and may need tuning per CLI version. Because coban
+captures the mouse, use your terminal's selection modifier (e.g. ⌥/Option-drag) to select text.
 
 ## License
 

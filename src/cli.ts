@@ -3,7 +3,7 @@ import { loadConfig, SOCK } from './config.ts';
 
 const HELP = `coban — çok hesaplı agent orkestratörü
 
-  coban [--cwd dizin]                 arayüzü aç (orkestratör otomatik başlar)
+  coban [--cwd dizin]                 arayüzü aç (orkestratörü graf alanındaki + ile seç)
 
 Agent'ların içinden (veya başka bir terminalden):
   coban agents                        agent listesi ve durumları
@@ -64,7 +64,6 @@ async function main() {
     hub.size = tui.paneSize;
     hub.listen();
     tui.start();
-    hub.spawn({ profile: hub.cfg.orchestrator, role: 'orchestrator' });
     const quit = () => { tui.stop(); hub.shutdown(); process.exit(0); };
     process.on('SIGTERM', quit);
     process.on('SIGHUP', quit);
