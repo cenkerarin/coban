@@ -1,20 +1,42 @@
-// Renders docs/screenshot.svg: coban with scripted demo agents (scripts/demo-agent.mjs), captured mid-animation.
+// Renders docs/screenshot.svg, approvals.svg and usage.svg: coban with scripted demo agents (scripts/demo-agent.mjs), captured mid-animation.
 // Run: npm run snapshot
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { startCoban, sleep, until, ROOT } from '../test/helpers.ts';
 
 const COLS = 200, ROWS = 48;
-const demo = (id: string, title: string, color: string) =>
-  ({ id, title, color, cmd: `${process.execPath} ${path.join(ROOT, 'scripts', 'demo-agent.mjs')}`, promptArg: '{prompt}' });
+type Profile = Parameters<typeof startCoban>[2] extends (infer P)[] | undefined ? P : never;
+const demo = (id: string, title: string, color: string, cmd?: string, extra: object = {}): Profile =>
+  ({ id, title, color, cmd: cmd ?? `${process.execPath} ${path.join(ROOT, 'scripts', 'demo-agent.mjs')}`, promptArg: '{prompt}', ...extra });
+const profiles = () => [demo('h1', 'Claude H1', '#F6D5C8'), demo('h2', 'Claude H2', '#FFD9A0'), demo('h3', 'Claude H3', '#C8E6C9')];
+type Coban = Awaited<ReturnType<typeof startCoban>>;
 
-const c = await startCoban(COLS, ROWS, [demo('h1', 'Claude H1', '#F6D5C8'), demo('h2', 'Claude H2', '#FFD9A0'), demo('h3', 'Claude H3', '#C8E6C9')]);
-try {
-  c.write('\r'); await sleep(300); c.write('1');
-  await until(async () => (await c.cli('', 'agents')).includes('★'));
+// Boots coban with the demo agents, runs `scenario`, and writes docs/<name>.svg.
+async function snapshot(name: string, scenario: (c: Coban) => Promise<void>, ps: Profile[] = profiles()) {
+  const c = await startCoban(COLS, ROWS, ps);
+  try {
+    c.write('\r'); await sleep(300); c.write('1');
+    await until(async () => (await c.cli('', 'agents')).includes('★'));
+    await scenario(c);
+    fs.mkdirSync(path.join(ROOT, 'docs'), { recursive: true });
+    const out = path.join(ROOT, 'docs', `${name}.svg`);
+    fs.writeFileSync(out, toSvg(c.term));
+    console.log(`wrote ${path.relative(process.cwd(), out)}`);
+  } finally {
+    await c.stop();
+  }
+}
+
+const spawnAll = async (c: Coban, ask = true) => {
   await c.cli('orkestra', 'spawn', 'h2', 'HEDEF: POST /login endpointi', '--name', 'api');
   await c.cli('orkestra', 'spawn', 'h3', 'HEDEF: giriş formu ve token saklama', '--name', 'istemci');
-  await c.cli('orkestra', 'spawn', 'h1', 'HEDEF: login uçtan uca testleri ASK', '--name', 'test');
+  await c.cli('orkestra', 'spawn', 'h1', `HEDEF: login uçtan uca testleri${ask ? ' ASK' : ''}`, '--name', 'test');
+};
+
+// 1) overview: workers talking over the shared inbox
+await snapshot('screenshot', async (c) => {
+  await spawnAll(c);
   await sleep(1500);
   await c.cli('api', 'post', 'all', 'POST /login artık {token, user} döndürüyor; hata 401 + {error}');
   await sleep(900);
@@ -26,12 +48,50 @@ try {
   await sleep(2600);
   await c.cli('istemci', 'post', 'all', 'Login formu hazır; /refresh 401 dönerse oturumu kapatıyor');
   await sleep(230); // packets in flight
-  fs.mkdirSync(path.join(ROOT, 'docs'), { recursive: true });
-  const out = path.join(ROOT, 'docs', 'screenshot.svg');
-  fs.writeFileSync(out, toSvg(c.term));
-  console.log(`wrote ${path.relative(process.cwd(), out)}`);
-} finally {
-  await c.stop();
+});
+
+// 2) a worker is blocked on a permission question
+await snapshot('approvals', async (c) => {
+  await spawnAll(c);
+  await until(async () => /test\s.*blocked/.test(await c.cli('', 'agents')) || (await c.cli('', 'approvals')).includes('playwright'), 10000);
+  await sleep(1200);
+  await c.cli('api', 'post', 'orkestra', 'api bitti: POST /login + /refresh');
+  await sleep(600);
+});
+
+// 3) per-account usage bars: synthetic Claude session logs in a throwaway CLAUDE_CONFIG_DIR (never the real ~/.claude)
+{
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'coban-usage-'));
+  const bin = path.join(tmp, 'bin'); fs.mkdirSync(bin);
+  // isClaude() keys on the command name, so give the demo agent a `claude` launcher
+  const wrapper = path.join(bin, 'claude');
+  fs.writeFileSync(wrapper, `#!/bin/sh\nexec "${process.execPath}" "${path.join(ROOT, 'scripts', 'demo-agent.mjs')}" "$@"\n`, { mode: 0o755 });
+  const fake = (id: string, pct: number) => {
+    const dir = path.join(tmp, id, 'projects', 'demo'); fs.mkdirSync(dir, { recursive: true });
+    const lines = [0, 1, 2].map((_, i) => JSON.stringify({
+      type: 'assistant', timestamp: new Date(Date.now() - (3.4 - i) * 3600_000).toISOString(),
+      message: { id: `${id}-${i}`, usage: { input_tokens: 0, output_tokens: Math.round(DEMO_LIMIT * pct * [0.2, 0.3, 0.5][i]) } },
+    }));
+    fs.writeFileSync(path.join(dir, 's.jsonl'), lines.join('\n') + '\n');
+    return path.join(tmp, id);
+  };
+  const DEMO_LIMIT = 5_000_000;
+  const oldPath = process.env.PATH;
+  process.env.PATH = `${bin}:${oldPath}`;
+  try {
+    const ps = [['h1', 'Claude H1', '#F6D5C8', 0.47], ['h2', 'Claude H2', '#FFD9A0', 0.12], ['h3', 'Claude H3', '#C8E6C9', 0.86]]
+      .map(([id, t, col, pct]) => demo(id as string, t as string, col as string, 'claude', { env: { CLAUDE_CONFIG_DIR: fake(id as string, pct as number) }, limit5h: DEMO_LIMIT }));
+    await snapshot('usage', async (c) => {
+      await spawnAll(c, false);
+      await sleep(1500);
+      await c.cli('api', 'post', 'all', 'POST /login artık {token, user} döndürüyor; hata 401 + {error}');
+      await until(() => c.screen().includes('▰'), 8000);
+      await sleep(1200);
+    }, ps);
+  } finally {
+    process.env.PATH = oldPath;
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 }
 
 // ── xterm buffer → SVG ───────────────────────────────────────

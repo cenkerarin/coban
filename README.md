@@ -3,18 +3,49 @@
 [![ci](https://github.com/cenkerarin/coban/actions/workflows/ci.yml/badge.svg)](https://github.com/cenkerarin/coban/actions/workflows/ci.yml)
 [![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 
-A terminal app (think [herdr](https://www.bitdoze.com/herdr-agent-multiplexer/)) where **one orchestrator agent
-dispatches work to many AI coding agents** — several Claude Code accounts, Codex, OpenCode, Cursor — and those
-agents **talk to each other** over direct messages and a shared board.
+**One orchestrator agent splits your request and hands the pieces to many AI coding agents** — several Claude Code
+accounts, Codex, OpenCode, Cursor — while they message each other over direct messages and a shared board. You watch
+and steer it all from one terminal screen.
 
-*Çoban* is Turkish for shepherd. The UI labels and the prompts coban gives agents are in Turkish for now.
+```sh
+npm install -g coban      # Node >= 24, macOS or Linux
+cd ~/your-project && coban
+```
 
 ![coban: conversation feed, agent graph and chat](docs/screenshot.svg)
 
 <sub>Rendered by `npm run snapshot` with scripted demo agents. Left: who said what to whom. Middle: the orchestrator
 and its workers — the dots on the edges are messages in flight. Right: the focused agent's real terminal.</sub>
 
-> **Status: early (v0.2).** Its author runs it with three Claude accounts; Codex, OpenCode and Cursor
+## Why
+
+- **Use all your accounts.** Hit a usage limit on one Claude account and coban hands the task to the least-spent one.
+- **Parallel work without chaos.** Workers get small, scoped tasks with the exact code they need inlined, and tell
+  each other about interface changes on the board.
+- **You stay in control.** Permission questions from every agent land in one place and you answer them in a keystroke.
+- **Plain tools.** Agents are the real CLIs in real terminals. No new agent runtime, no MCP server.
+
+*Çoban* is Turkish for shepherd. The UI labels and the prompts coban gives agents are in Turkish for now.
+
+## A session in four steps
+
+1. **Start** `coban` in your project and pick the orchestrator with the `+` bubble (it defaults to your first profile).
+2. **Ask** in the chat, e.g. *"add a login endpoint and a login form, with tests"*.
+3. **Watch** the orchestrator run `coban map`, spawn workers (`api`, `istemci`, `test`), and give each its task and code.
+   Workers post decisions to the board and message each other; packets travel along the graph edges.
+4. **Answer** permission questions when a worker turns `blocked`, then read the orchestrator's summary.
+
+**Approvals in one place** — a worker turns red and its permission question appears in the box at the bottom right;
+answer with `y` / `a` (always) / `r` (reject) without leaving the chat.
+
+![approvals](docs/approvals.svg)
+
+**Usage per account** — the status bar shows each account's 5-hour usage, and the orchestrator hands new work to the
+least-spent one.
+
+![usage](docs/usage.svg)
+
+> **Status: early (v0.3).** Its author runs it with three Claude accounts; Codex, OpenCode and Cursor
 > profiles are wired up but barely tested. Issues and PRs welcome.
 
 ## How it works
