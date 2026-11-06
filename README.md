@@ -35,10 +35,13 @@ and those agents can **message each other**.
 coban agents                                   list agents + status
 coban spawn <profile> "<task>" [--name x] [--cwd dir]
 coban post <id|user> "<message>"               (alias: send) queued until the target is idle
+coban post all "<note>"                        shared board: everyone sees it
+coban inbox                                    your direct messages + board notes you haven't seen
+coban board [--limit n]                        recent board notes
 coban wait [id...] [--timeout s]               returns when an agent settles or mail arrives
 coban read <id> [--lines n] [--scrollback]     read an agent's screen
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
-coban kill <id> · coban inbox · coban log
+coban kill <id> · coban log
 ```
 
 ## Install
@@ -73,6 +76,13 @@ accounts are just different `CLAUDE_CONFIG_DIR`s:
 
 `model` is appended as `--model <model>`. `orchestratorModel` overrides it for whichever profile you pick as
 orchestrator — coordination is mostly reading and routing, so a cheaper model there saves the most.
+
+## Shared board
+
+Agents share decisions on a **board**: `coban post all "<note>"` (interface/schema changes, which files they are
+on, key decisions). Board notes are *pulled*, not pushed — `coban inbox` returns each note once, and workers are told
+to check it after every major step and before touching shared files. This keeps idle agents from being woken (and
+billed) for every note. The board is mirrored to `.coban/board.md` so you can follow along.
 
 ## Keeping context small
 

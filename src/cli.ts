@@ -9,12 +9,13 @@ Agent'ların içinden (veya başka bir terminalden):
   coban agents                        agent listesi ve durumları
   coban spawn <profil> "<görev>" [--name ad] [--cwd dizin]
   coban send <id> "<mesaj>"           (post ile aynı)
-  coban post <id|user> "<mesaj>"
+  coban post <id|user|all> "<mesaj>"  all = ortak kutu (herkes görür)
   coban wait [id...] [--timeout sn]   biri durunca / mesaj gelince döner
   coban read <id> [--lines n] [--scrollback] [--raw]
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
   coban kill <id>
-  coban inbox
+  coban inbox                         özel mesajlar + ortak kutudaki yeniler
+  coban board [--limit n]             ortak kutunun son notları
   coban log [--limit n]
 
 Her komut --json ile ham çıktı verir.`;
@@ -106,6 +107,7 @@ async function main() {
         if (r.settled.length) out.push('durdu: ' + r.settled.map((a: any) => `${a.id} ${a.status}`).join(', '));
         if (r.removed.length) out.push('artık yok: ' + r.removed.join(', '));
         for (const m of r.messages) out.push(`✉ ${m.from}: ${m.text}`);
+        for (const m of r.board ?? []) out.push(`[ortak] ${m.from}: ${m.text}`);
         return out.join('\n');
       });
     }
@@ -117,7 +119,12 @@ async function main() {
     case 'kill': { const r = await call('kill', { id: pos[0] }); return print(r, () => `kapatıldı: ${pos[0]}`); }
     case 'inbox': {
       const r = await call('inbox', {});
-      return print(r, () => (r.messages.length ? r.messages.map((m: any) => `✉ ${m.from}: ${m.text}`).join('\n') : '(gelen kutusu boş)'));
+      const lines = [...r.messages.map((m: any) => `✉ ${m.from}: ${m.text}`), ...r.board.map((m: any) => `[ortak] ${m.from}: ${m.text}`)];
+      return print(r, () => (lines.length ? lines.join('\n') : '(yeni mesaj yok)'));
+    }
+    case 'board': {
+      const r = await call('board', { limit: num(flags.limit) });
+      return print(r, () => (r.board.length ? r.board.map((m: any) => `${new Date(m.ts).toTimeString().slice(0, 5)} ${m.from}: ${m.text}`).join('\n') : '(ortak kutu boş)'));
     }
     case 'log': {
       const r = await call('log', { limit: num(flags.limit) });

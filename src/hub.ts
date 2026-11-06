@@ -16,7 +16,10 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
   coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
   coban key <id> <tuş...>              enter, esc, up, down, tab, 1, 2, y ...
-  coban kill <id>  ·  coban inbox  ·  coban post user "<mesaj>"
+  coban post all "<not>"               ORTAK KUTU: herkesin göreceği kısa not (karar, arayüz/şema değişikliği, kim hangi dosyada)
+  coban inbox                          sana gelen mesajlar + ortak kutudaki yeni notlar (yalnızca okumadıkların)
+  coban board [--limit 20]             ortak kutunun son notları (yeni katılan biri için)
+  coban kill <id>  ·  coban post user "<mesaj>"
 
 Profiller: ${profiles.map((p) => `${p.id} (${p.title}${p.model ? ', ' + p.model : ''})`).join(', ')}.
 
@@ -25,6 +28,7 @@ CONTEXT'İ KORU — her çağrının çıktısı bağlamına eklenir ve sonraki 
 - İşçiler uzun sonuçları .coban/reports/<id>.md dosyasına yazar ve sana yolunu gönderir. O dosyayı ancak gerçekten gerekiyorsa, gerekirse yalnızca ilgili kısmını oku.
 - Beklerken uzun timeout kullan (\`coban wait --timeout 600\`), arka arkaya \`coban agents\` çağırma.
 - Görevleri kısa ve kendi içinde yeterli yaz: işçiye neyi, nerede, hangi kısıtla yapacağını söyle; dosyaları senin yerine o okusun.
+- İşçiler arası koordinasyonu ortak kutu üzerinden kur: paylaşılan kararları \`coban post all\` ile yaz, işçiler kutuyu kendileri kontrol eder. Her şeyi senin aktarmana gerek yok.
 - İşi biten işçiyi \`coban kill\` ile kapat. Alakasız yeni bir iş için eski işçiyi kullanma, yeni işçi aç.
 
 Kurallar:
@@ -34,7 +38,10 @@ Kurallar:
 - Bitince sonucu doğrula ve kullanıcıya kısa özet ver.`;
 
 const WORKER_PREAMBLE = (id: string, orch: string) => `[coban] Sen coban içinde çalışan bir işçi agent'sın. Kimliğin: ${id}. Orkestratör: ${orch}.
-Diğer agent'larla kabukta konuşursun: \`coban post <id> "mesaj"\` (liste: \`coban agents\`, gelen kutun: \`coban inbox\`).
+İletişim (kabukta):
+- \`coban inbox\` → sana gelen mesajlar + ORTAK KUTUDAKİ yeni notlar. Her büyük adımdan sonra ve başkalarının da kullandığı bir dosyayı değiştirmeden önce MUTLAKA çalıştır; bir not işini etkiliyorsa ona göre davran.
+- \`coban post all "..."\` → ortak kutuya kısa not: başkalarını etkileyen her şeyi yaz (değiştirdiğin arayüz/şema/fonksiyon imzası, üzerinde çalıştığın dosyalar, önemli karar). Tek satır, net.
+- \`coban post <id> "..."\` → tek bir agent'a mesaj (liste: \`coban agents\`).
 Bitince orkestratöre EN FAZLA 5 satırlık özet gönder: \`coban post ${orch} "..."\`. Ayrıntı (uzun rapor, liste, diff açıklaması) gerekiyorsa .coban/reports/${id}.md dosyasına yaz ve özette sadece yolunu ver. Belirsizlik olursa orkestratöre kısa bir soru gönder.
 
 GÖREV:
@@ -68,6 +75,8 @@ export class Hub extends EventEmitter {
   order: string[] = [];
   focus = '';
   log: Msg[] = [];
+  board: Msg[] = [];                              // shared box: `coban post all`
+  boardSeen = new Map<string, number>();           // agent → last board msg id it has read
   seen = new Map<string, Map<string, number>>(); // caller → agent → settledSeq already reported
   size = { cols: 100, rows: 30 };
   private msgSeq = 0;
@@ -88,7 +97,7 @@ export class Hub extends EventEmitter {
   get orchestratorId() { return this.order.find((id) => this.agents.get(id)?.role === 'orchestrator') ?? ''; }
 
   private newId(base: string) {
-    if (!this.agents.has(base) && base !== 'user') return base;
+    if (!this.agents.has(base) && base !== 'user' && base !== 'all') return base;
     for (let n = 2; ; n++) if (!this.agents.has(`${base}-${n}`)) return `${base}-${n}`;
   }
 
@@ -165,6 +174,14 @@ export class Hub extends EventEmitter {
     this.log.push(m);
     if (this.log.length > 500) this.log.shift();
     if (to === 'user') { m.delivered = true; this.emit('notify', m); }
+    else if (to === 'all') {
+      // Not pushed into terminals (that would wake every idle agent); agents pull it via inbox/wait.
+      m.delivered = true;
+      this.board.push(m);
+      if (this.board.length > 500) this.board.shift();
+      this.boardSeen.set(from, m.id);
+      this.mirrorBoard(m);
+    }
     else {
       const a = this.get(to);
       a.inbox.push(m);
@@ -179,6 +196,22 @@ export class Hub extends EventEmitter {
     if (!pending.length || a.exitCode !== null) return;
     for (const m of pending) m.delivered = true;
     a.deliver(pending.map((m) => `[coban mesajı · ${m.from} → ${m.to}] ${m.text}`).join('\n\n'));
+  }
+
+  takeBoard(id: string): Msg[] {
+    const since = this.boardSeen.get(id) ?? 0;
+    const fresh = this.board.filter((m) => m.id > since && m.from !== id);
+    if (this.board.length) this.boardSeen.set(id, this.board[this.board.length - 1].id);
+    return fresh;
+  }
+
+  private mirrorBoard(m: Msg) {
+    try {
+      fs.mkdirSync('.coban', { recursive: true });
+      if (!fs.existsSync('.coban/.gitignore')) fs.writeFileSync('.coban/.gitignore', '*\n');
+      const t = new Date(m.ts).toTimeString().slice(0, 8);
+      fs.appendFileSync('.coban/board.md', `- ${t} **${m.from}**: ${m.text.replace(/\s*\n\s*/g, ' ')}\n`);
+    } catch {}
   }
 
   takeInbox(id: string): Msg[] {
@@ -206,6 +239,7 @@ export class Hub extends EventEmitter {
         settled: settled.map((a) => ({ id: a.id, status: a.status })),
         removed: gone,
         messages: mail ? this.takeInbox(caller).map(({ from, text }) => ({ from, text })) : [],
+        board: this.takeBoard(caller).map(({ from, text }) => ({ from, text })),
       };
     };
     return new Promise((resolve) => {
@@ -252,7 +286,11 @@ export class Hub extends EventEmitter {
         return { ok: true };
       }
       case 'wait': return this.wait(caller, p.ids ?? [], p.timeout ?? 300);
-      case 'inbox': return { messages: this.takeInbox(caller).map(({ from, text, ts }) => ({ from, text, ts })) };
+      case 'inbox': return {
+        messages: this.takeInbox(caller).map(({ from, text, ts }) => ({ from, text, ts })),
+        board: this.takeBoard(caller).map(({ from, text, ts }) => ({ from, text, ts })),
+      };
+      case 'board': return { board: this.board.slice(-(p.limit ?? 20)).map(({ from, text, ts }) => ({ from, text, ts })) };
       case 'kill': this.kill(p.id); return { ok: true };
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);
