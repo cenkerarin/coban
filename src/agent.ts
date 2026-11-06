@@ -33,6 +33,7 @@ export class Agent extends EventEmitter {
   inbox: Msg[] = [];
   model = '';
   briefed = false;      // has received the coban worker brief
+  handedOff = false;    // hit a limit and its task was already handed to another account (hub.handoff)
 
   constructor(o: { id: string; profile: Profile; role: Role; task: string; cwd: string; cmd: string; env: Record<string, string>; cols: number; rows: number }) {
     super();

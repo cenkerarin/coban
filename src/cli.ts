@@ -1,6 +1,7 @@
 import net from 'node:net';
 import { loadConfig, SOCK } from './config.ts';
 import { repoMap, snippets } from './context.ts';
+import { allUsage, type AccountUsage } from './usage.ts';
 
 const HELP = `coban — çok hesaplı agent orkestratörü
 
@@ -20,6 +21,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban kill <id>
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
   coban board [--limit n]             ortak kutunun son notları
+  coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
   coban log [--limit n]
 
 Her komut --json ile ham çıktı verir.`;
@@ -136,6 +138,16 @@ async function main() {
     case 'log': {
       const r = await call('log', { limit: num(flags.limit) });
       return print(r, () => r.messages.map((m: any) => `${new Date(m.ts).toTimeString().slice(0, 5)} ${m.from}→${m.to}: ${one(m.text)}`).join('\n'));
+    }
+    case 'usage': {
+      // Works without a running coban too (then 'limited' is unknown → false).
+      const r = await call('usage', {}).catch(() => ({ usage: allUsage(loadConfig()) }));
+      const tok = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
+      const line = (u: AccountUsage) => !u.limit5h
+        ? [u.profileId, 'bilinmiyor', u.limited ? 'LİMİTLİ' : ''].filter(Boolean).join('  ')
+        : [u.profileId, `5s ${Math.round(u.pct5h * 100)}% (${tok(u.used5h)}/${tok(u.limit5h)})`, `7g ${tok(u.used7d)}`,
+          u.resetAt ? `reset ${new Date(u.resetAt).toTimeString().slice(0, 5)}` : 'reset -', u.limited ? 'LİMİTLİ' : ''].filter(Boolean).join('  ');
+      return print(r, () => r.usage.map(line).join('\n'));
     }
     case 'map': console.log(repoMap(process.cwd(), pos[0] ?? '')); return;
     case 'help': case '-h': case '--help': console.log(HELP); return;

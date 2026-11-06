@@ -1,5 +1,6 @@
 import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
+import type { AccountUsage } from './usage.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -43,6 +44,25 @@ const hhmm = (ts: number) => { const t = new Date(ts); return `${String(t.getHou
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const FRAME_MS = 80;
+
+// ── per-account usage bars (cached; refreshed every 30 s, never in the render path) ──
+const USAGE_MS = 30_000;
+const usageBarSegs = (u: AccountUsage[], room: number): { segs: Seg[]; len: number } => {
+  const segs: Seg[] = [];
+  let len = 0;
+  const bw = room >= u.length * 20 ? 6 : 4;
+  for (const a of u) {
+    const pct = Math.max(0, a.pct5h || 0);
+    const n = Math.round(clamp(pct, 0, 1) * bw);
+    const col = a.limited ? '1;38;5;203' : pct > 0.8 ? '1;38;5;214' : GOLD;
+    const label = `${a.profileId} `, tail = ` ${Math.round(pct * 100)}%${a.limited ? '⧗' : ''}`;
+    const w = label.length + bw + tail.length + 2;
+    if (len + w > room) break;
+    segs.push([label, DIM], ['▰'.repeat(n), col], ['▱'.repeat(bw - n), '38;5;238'], [tail + '  ', a.limited ? col : '38;5;250']);
+    len += w;
+  }
+  return { segs, len };
+};
 
 // ── a tiny cell canvas with box-drawing line joins ─────────────
 type Seg = [text: string, sgr: string];
@@ -162,6 +182,11 @@ export class Tui {
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
+    hub.on('handoff', (h: { from: string; to: string | null; fromProfile: string; toProfile: string | null }) => {
+      if (h.to) this.event(h.to, '⇄', STATUS_STYLE.limited[1], `devir: ${h.from} (${h.fromProfile}) → ${h.toProfile}`);
+      else this.event(h.from, '⇄', STATUS_STYLE.limited[1], `devir yapılamadı${h.toProfile ? ` (${h.toProfile})` : ': uygun hesap yok'}`);
+      this.usageAt = 0; this.schedule();
+    });
     hub.on('notify', (m: Msg) => this.flash(`✉ ${m.from}: ${flat(m.text)}`, 15000));
   }
 
@@ -880,6 +905,17 @@ export class Tui {
     return s + '\x1b[0m' + ' '.repeat(Math.max(0, x1 - Math.max(col, x0)));
   }
 
+  usage: AccountUsage[] = [];
+  usageAt = 0;
+  refreshUsage() {
+    if (this.now - this.usageAt < USAGE_MS) return;
+    this.usageAt = this.now;
+    setImmediate(() => { // off the render path; hub.usage() includes limitedAt
+      try { this.usage = this.hub.usage(); } catch { this.usage = []; }
+      this.schedule();
+    });
+  }
+
   statusBar(w: number): string {
     const hub = this.hub;
     let left: string;
@@ -896,6 +932,13 @@ export class Tui {
     const l = left.length <= room ? left : fit(left, room);
     const last = hub.log.at(-1);
     const feedVisible = this.geo?.fw > 0;
+    this.refreshUsage();
+    const ub = this.usage.length && !this.prefix && this.mode === 'normal' && !this.selectMode ? usageBarSegs(this.usage, room - l.length - 1) : null;
+    if (ub?.len) {
+      const pad = room - l.length - ub.len - 1;
+      const body = ub.segs.map(([t, g]) => `\x1b[${g};48;5;235m${t}`).join('');
+      return `${bg}${l}\x1b[0;48;5;235m ${body}\x1b[0;38;5;244;48;5;235m${' '.repeat(Math.max(0, pad))}\x1b[0;30;48;5;223m${right}\x1b[0m`;
+    }
     const mid = !feedVisible && !right && !this.prefix && this.mode === 'normal' && last ? ` ✉ ${last.from}→${last.to}: ${flat(last.text)}` : '';
     return `${bg}${l}\x1b[0;38;5;244;48;5;235m${fit(mid, room - l.length)}\x1b[0;30;48;5;223m${right}\x1b[0m`;
   }

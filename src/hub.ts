@@ -3,6 +3,7 @@ import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import { Agent, keyBytes, type Msg, type Role, type Status } from './agent.ts';
 import { BIN_DIR, DEFAULT_SOCK, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
+import { allUsage, isClaude, type AccountUsage } from './usage.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'exited'];
@@ -21,6 +22,7 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban post all "<not>"               ORTAK KUTU: herkesin göreceği kısa not (karar, arayüz/şema değişikliği, kim hangi dosyada)
   coban inbox                          sana gelen mesajlar + ortak kutudaki yeni notlar (yalnızca okumadıkların)
   coban board [--limit 20]             ortak kutunun son notları (yeni katılan biri için)
+  coban usage                          hesap başına kullanım: 5 saatlik %, 7 günlük token, reset; en az harcayan başta
   coban kill <id>  ·  coban post user "<mesaj>"
 
 Profiller: ${profiles.map((p) => `${p.id} (${p.title}${p.model ? ', ' + p.model : ''})`).join(', ')}.
@@ -46,7 +48,7 @@ GÖREV NASIL YAZILIR — işçinin her isteği ~45k'lık sabit bağlamı yeniden
 
 Kurallar:
 - Aynı dosyalara yazacak iki işçi açma; gerekiyorsa ayrı git worktree kullandır.
-- Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan. "limited" olan işçinin işini başka hesaba devret.
+- Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan: iş vermeden önce \`coban usage\` bak ve işi (uygun modeldeki) EN AZ HARCAMIŞ hesaba ver. "limited" olan işçiyi coban otomatik olarak en az harcamış uygun hesaba devreder (<eski>-devir); sen sadece gelen devir bildirimini doğrula, uygun hesap yoksa kullanıcıya bildir.
 - "blocked" işçinin izin sorusunu güvenli ve görev kapsamındaysa \`coban key\` ile onayla, emin değilsen kullanıcıya sor.
 - Bitince sonucu doğrula ve kullanıcıya kısa özet ver.`;
 
@@ -90,6 +92,7 @@ export class Hub extends EventEmitter {
   focus = '';
   log: Msg[] = [];
   board: Msg[] = [];                              // shared box: `coban post all`
+  limitedAt = new Map<string, number>();           // profile → last time one of its agents went 'limited'
   boardSeen = new Map<string, number>();           // agent → last board msg id it has read
   seen = new Map<string, Map<string, number>>(); // caller → agent → settledSeq already reported
   size = { cols: 100, rows: 30 };
@@ -143,6 +146,8 @@ export class Hub extends EventEmitter {
     a.briefed = !!task; // workers spawned with a task already got the brief
     a.on('render', () => this.emit('render', a));
     a.on('status', (s: Status) => {
+      if (s === 'limited') this.limitedAt.set(a.profile.id, Date.now());
+      if (s === 'limited' && a.role === 'worker' && !a.handedOff) queueMicrotask(() => this.handoff(a.id));
       if (SETTLED.includes(s)) {
         if (this.focus !== a.id) a.unread = true;
         if (s === 'idle') this.flushInbox(a);
@@ -292,6 +297,61 @@ export class Hub extends EventEmitter {
     });
   }
 
+  // ── automatic handoff: a worker that hit its account limit moves to the least-spent account of the same kind ──
+  // Returns the new agent's id, or null when nothing was handed off. Emits 'handoff' {from, to, fromProfile, toProfile}.
+  handoff(id: string): string | null {
+    const a = this.agents.get(id);
+    if (!a || a.role !== 'worker' || a.handedOff) return null;
+    a.handedOff = true; // once per agent, whatever happens below
+    const orch = this.orchestratorId;
+    const tell = (text: string) => { if (orch) this.post('coban', orch, text); else this.post('coban', 'user', text); };
+    const kind = (p: Profile) => (isClaude(p) ? 'claude' : p.cmd.trim().split(/\s+/)[0]);
+    const want = kind(a.profile);
+    const byId = new Map(this.cfg.profiles.map((p) => [p.id, p]));
+    let list: AccountUsage[] = [];
+    try { list = this.usage(); } catch {}
+    const cands = list.filter((u) => {
+      const p = byId.get(u.profileId);
+      return p && u.profileId !== a.profile.id && !u.limited && kind(p) === want;
+    });
+    // Usage order is kept (least spent first); for claude, the h* account profiles go first; the orchestrator's account last.
+    const orchProfile = orch ? this.agents.get(orch)?.profile.id : undefined;
+    const rank = (u: AccountUsage) => (u.profileId === orchProfile ? 2 : 0) + (want === 'claude' && !/^h/.test(u.profileId) ? 1 : 0);
+    cands.sort((x, y) => rank(x) - rank(y));
+    const target = cands[0];
+    if (!target) {
+      tell(`${a.id} (${a.profile.id}) kullanım limitine takıldı; devredilecek uygun hesap yok. Görevi beklet veya elle yeniden dağıt.`);
+      this.emit('handoff', { from: a.id, to: null, fromProfile: a.profile.id, toProfile: null });
+      return null;
+    }
+    const MARK = '\nORİJİNAL GÖREV:\n';
+    const orig = a.task.includes(MARK) ? a.task.slice(a.task.lastIndexOf(MARK) + MARK.length) : a.task;
+    let screen = compactScreen(a.screenText(120, true), 40);
+    if (screen.length > 4000) screen = '…' + screen.slice(-4000);
+    const task = `DEVİR: Bu görevde çalışan ${a.id} (${a.profile.id}) hesabının kullanım limiti doldu; görev sana devredildi. ` +
+      `Aşağıda önceki işçinin ekranının son hali var (şu ana kadar yapılanlar). Dosyalardaki mevcut değişiklikleri (git status/diff) kontrol et, ` +
+      `yapılmış işi tekrarlama, kaldığı yerden devam et.\n--- ÖNCEKİ İŞÇİNİN EKRANI ---\n${screen || '(boş)'}\n--- SON ---${MARK}${orig}`;
+    let b: Agent;
+    try {
+      b = this.spawn({ profile: target.profileId, role: 'worker', task, name: `${a.id.replace(/-devir(-\d+)?$/, '')}-devir`, cwd: a.cwd });
+    } catch (e: any) {
+      tell(`${a.id} limitte; ${target.profileId} hesabına devir başarısız: ${e?.message ?? e}`);
+      this.emit('handoff', { from: a.id, to: null, fromProfile: a.profile.id, toProfile: target.profileId });
+      return null;
+    }
+    const pending = a.inbox.filter((m) => !m.delivered);
+    try { this.kill(a.id); } catch {}
+    for (const m of pending) { m.to = b.id; b.inbox.push(m); } // undelivered mail follows the task
+    const note = `${a.id} limitten ${target.profileId} hesabına devredildi → ${b.id}`;
+    this.post('coban', 'all', note);
+    if (orch) this.post('coban', orch, note);
+    this.emit('handoff', { from: a.id, to: b.id, fromProfile: a.profile.id, toProfile: target.profileId });
+    return b.id;
+  }
+
+  // Per-account usage, least spent first (for `coban usage` and the TUI).
+  usage(): AccountUsage[] { return allUsage(this.cfg, this.limitedAt); }
+
   list() {
     return this.order.map((id) => {
       const a = this.agents.get(id)!;
@@ -336,6 +396,7 @@ export class Hub extends EventEmitter {
         this.markBoardRead(caller);
         return r;
       }
+      case 'usage': return { usage: this.usage() };
       case 'kill': this.kill(p.id); return { ok: true };
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);

@@ -10,6 +10,7 @@ export type Profile = {
   promptArg?: string;                // how an initial task is passed, "{prompt}" is replaced (already quoted)
   env?: Record<string, string>;
   color?: string;
+  limit5h?: number;                  // token budget per 5h window for `coban usage` (claude only; default in usage.ts)
 };
 
 export type Config = {

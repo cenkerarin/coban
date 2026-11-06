@@ -47,11 +47,18 @@ coban post <id|user> "<message>"               (alias: send) queued until the ta
 coban post all "<note>"                        shared board: everyone sees it
 coban inbox                                    your direct messages + board notes you haven't seen
 coban board [--limit n]                        recent board notes
+coban usage                                    per-account usage: 5h %, 7-day tokens, reset; least spent first
 coban wait [id...] [--timeout s]               returns when an agent settles or mail arrives
 coban read <id> [--lines n] [--scrollback]     read an agent's screen
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
 coban kill <id> · coban log
 ```
+
+`coban usage` reads each Claude profile's session logs (`$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`) and sums
+input + output + cache-creation tokens (cache reads are excluded) over the last 5 hours and 7 days. The 5-hour
+percentage is against the profile's `limit5h` in `config.json` (tokens); without it a default of 5M is used, which
+is only a rough guess — set it per account to match your plan. Non-Claude profiles show `bilinmiyor` (unknown).
+The orchestrator is told to hand new work to the least-spent account.
 
 ## Install
 
