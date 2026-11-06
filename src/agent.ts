@@ -12,7 +12,23 @@ export type Msg = { id: number; from: string; to: string; text: string; ts: numb
 
 // Screen heuristics. Checked against the bottom of the visible screen.
 const BLOCKED = /Do you want to (proceed|make this edit|create|allow|run)|Would you like to (run|make|proceed|allow)|Allow (this|command|once)|\(y\/n\)|\[y\/N\]|Approve\b.*\?|Press enter to confirm|trust (this|the files in this) folder|Do you trust/i;
-const LIMITED = /usage limit|rate limit|limit reached|You've hit your|out of (credits|extra usage)/i;
+// A CLI's own limit banner: a short line of its own, optionally behind one bullet/box glyph, sitting in the last few
+// non-chrome lines of the screen (just above the idle prompt). Line-anchored on purpose: the same words inside a task
+// text, a prompt echo ('> …'), a quote or mid-sentence tool output must never trigger a handoff.
+const LIMIT_BANNER = /^\s{0,4}(?:[⎿●•✻*·]\s{0,4})?(?:(?:Claude(?: AI)? )?usage limit reached|(?:5-hour|weekly|session|daily|opus|sonnet) limit reached|You(?:'|’)?ve (?:hit|reached) your (?:\w+[ -])?(?:usage )?limit|You have (?:hit|reached) your (?:\w+[ -])?(?:usage )?limit|You(?:'|’)re out of (?:credits|extra usage))(?:\s*$|[\s.!,:;|∙·–—(-])/i;
+const LIMIT_CHROME = /^\s*([─━═╌┄\-]{8,}|[╭╰│┃].*|❯.*|>.*|[⏵►▶]{2}.*|\? for shortcuts.*)$/;
+const LIMIT_TAIL_LINES = 4;
+// Broad form, only for masking quoted screen text (handoff tasks) so it can't re-trigger a limit in the new worker.
+const LIMIT_WORDS = /(?:(?:usage|rate) limit|limit reached|(?:hit|reached) your[^\n]{0,24}?limit|out of (?:credits|extra usage))/gi;
+
+export function limitBanner(screen: string): boolean {
+  const lines = screen.split('\n').filter((l) => l.trim() && !LIMIT_CHROME.test(l)).slice(-LIMIT_TAIL_LINES);
+  return lines.some((l) => l.length <= 200 && LIMIT_BANNER.test(l));
+}
+
+export function maskLimitText(text: string): string {
+  return text.replace(LIMIT_WORDS, (m) => `[${m.replace(/limit/gi, 'l*mit')}]`);
+}
 const BUSY = /esc to interrupt|esc to cancel|ctrl\+c to (interrupt|stop)|Working \(|Thinking\.\.\./i;
 const QUIET_MS = 1500;
 
@@ -47,7 +63,8 @@ export class Agent extends EventEmitter {
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'h' }, (p) => { if (p.includes(25)) this.cursorVisible = true; return false; });
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (p) => { if (p.includes(25)) this.cursorVisible = false; return false; });
 
-    this.proc = pty.spawn('/bin/zsh', ['-c', `exec ${o.cmd}`], {
+    // /bin/sh, not the user's shell: profiles are plain commands and sh exists everywhere (zsh is missing on most Linux).
+    this.proc = pty.spawn('/bin/sh', ['-c', `exec ${o.cmd}`], {
       name: 'xterm-256color', cols: o.cols, rows: o.rows, cwd: o.cwd, env: o.env,
     });
     this.proc.onData((d) => {
@@ -78,7 +95,7 @@ export class Agent extends EventEmitter {
     if (this.status === 'exited') return;
     const tail = this.screenText(18);
     let next: Status;
-    if (LIMITED.test(tail) && !BUSY.test(tail)) next = 'limited';
+    if (limitBanner(tail) && !BUSY.test(tail)) next = 'limited';
     else if (BLOCKED.test(tail)) next = 'blocked';
     // A visible "esc to interrupt" means real work, even right after launch (workers get their task as an argv
     // prompt and never pass through idle). Bare output without it is still startup noise.
