@@ -1,4 +1,10 @@
 #!/bin/sh
 # Resolve the real script location so symlinks (e.g. ~/.local/bin/coban) work.
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
-exec node --disable-warning=ExperimentalWarning "$(dirname "$SELF")/../src/cli.ts" "$@"
+ROOT="$(dirname "$SELF")/.."
+if [ -f "$ROOT/dist/cli.js" ]; then
+  ENTRY="$ROOT/dist/cli.js"
+else
+  ENTRY="$ROOT/src/cli.ts"
+fi
+exec node --disable-warning=ExperimentalWarning "$ENTRY" "$@"

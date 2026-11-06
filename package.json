@@ -1,12 +1,14 @@
 {
   "name": "coban",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "description": "A terminal app where one orchestrator agent dispatches work to many AI coding agents — several Claude Code accounts, Codex, OpenCode, Cursor — that message each other over a shared board.",
   "scripts": {
     "postinstall": "node -e \"for(const a of ['darwin-arm64','darwin-x64','linux-x64','linux-arm64']){try{require('fs').chmodSync(require.resolve('node-pty/package.json').replace('package.json','prebuilds/'+a+'/spawn-helper'),0o755)}catch{}}\"",
     "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
     "typecheck": "tsc -p tsconfig.json",
-    "snapshot": "node --disable-warning=ExperimentalWarning scripts/snapshot.ts"
+    "snapshot": "node --disable-warning=ExperimentalWarning scripts/snapshot.ts",
+    "build": "tsc -p tsconfig.build.json",
+    "prepublishOnly": "npm run typecheck && npm test && npm run build"
   },
   "keywords": [
     "ai",
@@ -47,7 +49,7 @@
   },
   "files": [
     "bin/",
-    "src/",
+    "dist/",
     "README.md",
     "LICENSE"
   ],

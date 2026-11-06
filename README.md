@@ -50,7 +50,16 @@ coban kill <id> · coban log                    every command takes --json
 
 ## Install
 
-Requires Node ≥ 24 (TypeScript runs directly, no build step) on macOS or Linux.
+Requires Node ≥ 24 on macOS or Linux.
+
+```sh
+npm install -g coban
+cd ~/your-project && coban
+```
+
+### From source (development)
+
+In a clone, TypeScript runs directly with no build step:
 
 ```sh
 git clone https://github.com/cenkerarin/coban && cd coban
@@ -58,6 +67,8 @@ npm install
 ln -s "$PWD/bin/coban" ~/.local/bin/coban
 cd ~/your-project && coban
 ```
+
+`npm run build` compiles to `dist/`, which `bin/coban` prefers when present.
 
 ## Config
 
