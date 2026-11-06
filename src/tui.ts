@@ -14,6 +14,7 @@ const STATUS_STYLE: Record<Status, [string, string, string]> = {
   working:  ['●', '38;5;214', 'çalışıyor'],
   blocked:  ['!', '1;38;5;203', 'izin bekliyor'],
   limited:  ['⧗', '1;38;5;199', 'limit doldu'],
+  error:    ['✗', '1;38;5;196', 'hata'],
   idle:     ['○', '38;5;248', 'boşta'],
   exited:   ['×', '38;5;240', 'kapandı'],
 };
@@ -251,6 +252,7 @@ export class Tui {
         if (a.status === 'working') { this.workingSince.set(id, now); this.doneCandidates.delete(id); }
         if (a.status === 'blocked') this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
         if (a.status === 'limited') this.event(id, '⧗', STATUS_STYLE.limited[1], 'kullanım limiti doldu');
+        if (a.status === 'error') this.event(id, '✗', STATUS_STYLE.error[1], 'çalışamıyor (giriş/sağlayıcı hatası)', a.error);
         if (a.status === 'exited') this.event(id, '×', DIM, 'süreç kapandı');
         if (a.status === 'idle' && prev === 'working') this.doneCandidates.set(id, now);
         if (a.status === 'idle' && prev === 'starting') this.event(id, '○', DIM, 'hazır');

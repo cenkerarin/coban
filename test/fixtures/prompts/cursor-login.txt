@@ -1,0 +1,21 @@
+
+
+
+
+
+
+
+
+
+
+                               .db.
+                            .ggggggg.
+                           b.         d    o8888 88   88 88888o .d8888  d8A8b  88888.
+                           888b._    d8   dP     88   88 88__8P Y8.._  dP   Yb 88__8P
+                           888888   d88   Y8     88   8P 88""8o  `""Y8 Yb   dP 88""8o
+                           Y88888  d88P    Y8888 `Y8odP' 88  YA 88888"  Y8odP  88  YA
+                             `Y88 dP"
+                                `"
+                          v2026.05.01-eea359f
+                          Press any key to log in...
+

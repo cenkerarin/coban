@@ -7,12 +7,30 @@ import { allUsage, isClaude, type AccountUsage } from './usage.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
-const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'exited'];
+const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
+
+// What each non-Claude CLI needs to cooperate with coban, added at launch unless the profile already decides it:
+// - codex: its default sandbox denies the unix socket (`coban: connect EPERM …/coban.sock`), so every coban call
+//   fails. workspace-write + network_access lets it connect; commands still run sandboxed to the workspace.
+// - opencode: allow `coban …` shell calls without a permission prompt (inline config, merged with the user's).
+// Claude gets the same through --allowedTools 'Bash(coban:*)' in its cmd. Cursor has no per-run allow flag: its
+// prompts go through `coban approvals` (or add "Shell(coban)" to ~/.cursor/cli-config.json permissions.allow).
+export function launchFor(p: Profile): { args: string[]; env: Record<string, string> } {
+  const bin = p.cmd.trim().split(/\s+/)[0].split('/').pop();
+  const args: string[] = [], env: Record<string, string> = {};
+  if (bin === 'codex' && !/\s(-s|--sandbox|--full-auto|--dangerously-bypass-approvals-and-sandbox)\b|network_access/.test(' ' + p.cmd)) {
+    args.push('--sandbox workspace-write', '-c sandbox_workspace_write.network_access=true');
+  }
+  if (bin === 'opencode' && !p.env?.OPENCODE_CONFIG_CONTENT && !p.env?.OPENCODE_PERMISSION) {
+    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ permission: { bash: { 'coban *': 'allow' } } });
+  }
+  return { args, env };
+}
 
 const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı terminal uygulamasının ORKESTRATÖRÜsün (kimliğin: ${id}). Kullanıcı seninle bu panelde konuşuyor; diğer panellerde senin açtığın işçi agent'lar çalışıyor. İşin: isteği bağımsız parçalara bölmek, işçilere dağıtmak, izlemek, sonuçları birleştirip kullanıcıya raporlamak. Kod yazma işini işçilere bırak.
 
 İşçileri Bash'te \`coban\` ile yönetirsin (izin sormadan çalışır, çıktılar kısa ve tek satırlıktır):
-  coban agents                         agent'lar: id, profil, model, durum (working/blocked/limited/idle/exited)
+  coban agents                         agent'lar: id, profil, model, durum (working/blocked/limited/error/idle/exited)
   coban map [alt-dizin]                repo haritası: dosya (satır sayısı) ve sembol:satır listesi — repoyu tanımak için BUNU kullan
   coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
                                        --ctx "dosya#sembol1,sembol2" | "dosya:10-80" | "dosya": o kodu satır numaralı olarak görevin içine ekler
@@ -52,6 +70,7 @@ GÖREV NASIL YAZILIR — işçinin her isteği ~45k'lık sabit bağlamı yeniden
 Kurallar:
 - Aynı dosyalara yazacak iki işçi açma; gerekiyorsa ayrı git worktree kullandır.
 - Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan: iş vermeden önce \`coban usage\` bak ve işi (uygun modeldeki) EN AZ HARCAMIŞ hesaba ver. "limited" olan işçiyi coban otomatik olarak en az harcamış uygun hesaba devreder (<eski>-devir); sen sadece gelen devir bildirimini doğrula, uygun hesap yoksa kullanıcıya bildir.
+- "error" = agent hiç çalışamıyor (çıkış yapılmış hesap, süresi dolmuş token, sağlayıcı isteği reddediyor). Kendiliğinden düzelmez: görevi başka profile ver, işçiyi kapat, kullanıcıya hangi hesabın sorunlu olduğunu söyle.
 - "blocked" işçinin sorusunu \`coban approvals\` ile gör; güvenli ve görev kapsamındaysa \`coban approve <id>\` ile onayla, kapsam dışıysa \`coban approve <id> no\`, emin değilsen kullanıcıya sor (kullanıcı da coban'ın izin kutusundan onaylayabilir).
 - Bitince sonucu doğrula ve kullanıcıya kısa özet ver.`;
 
@@ -128,7 +147,8 @@ export class Hub extends EventEmitter {
   spawn(o: { profile: string; role: Role; task?: string; name?: string; cwd?: string }): Agent {
     const p = this.profile(o.profile);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
-    const parts = [p.cmd];
+    const launch = launchFor(p);
+    const parts = [p.cmd, ...launch.args];
     // orchestratorModel is a Claude model id: applying it to codex/opencode/cursor breaks them ("model not supported").
     const model = (o.role === 'orchestrator' && p.cmd.startsWith('claude') && this.cfg.orchestratorModel) || p.model;
     if (model) parts.push(`--model ${q(model)}`);
@@ -144,6 +164,7 @@ export class Hub extends EventEmitter {
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
+      ...launch.env,
       ...(p.env ?? {}),
       COBAN_AGENT: id,
       COBAN_SOCK: SOCK,
@@ -161,6 +182,17 @@ export class Hub extends EventEmitter {
     a.on('status', (s: Status) => {
       if (s === 'limited') this.limitedAt.set(a.profile.id, Date.now());
       if (s === 'limited' && a.role === 'worker' && !a.handedOff) queueMicrotask(() => { this.handoff(a.id).catch(() => {}); });
+      if (s === 'error' && a.error !== a.errorNotified) {
+        a.errorNotified = a.error;
+        const orch = this.orchestratorId;
+        const to = orch && orch !== a.id ? orch : 'user';
+        queueMicrotask(() => {
+          try {
+            this.post('coban', to, `${a.id} (${a.profile.title}) çalışamıyor — giriş veya sağlayıcı hatası: "${a.error}". ` +
+              (to === 'user' ? 'Hesabı kontrol et (giriş yap / sağlayıcıyı değiştir).' : 'Görevi başka bir profile ver ve kullanıcıya bildir; bu agent kendiliğinden düzelmez.'));
+          } catch {}
+        });
+      }
       if (SETTLED.includes(s)) {
         if (this.focus !== a.id) a.unread = true;
         if (s === 'idle') this.flushInbox(a);
@@ -411,6 +443,7 @@ export class Hub extends EventEmitter {
       const a = this.agents.get(id)!;
       return {
         id, profile: a.profile.id, model: a.model, role: a.role, status: a.status,
+        ...(a.status === 'error' ? { error: a.error } : {}),
         ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
         task: a.task.replace(/\s+/g, ' ').slice(0, 60),
         unreadMessages: a.inbox.filter((m) => !m.delivered).length,

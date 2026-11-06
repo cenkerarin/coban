@@ -103,11 +103,12 @@ Note: the prompts coban gives the orchestrator and workers, and `coban --help`, 
 | symptom | fix |
 |---|---|
 | `SyntaxError` / `ERR_UNKNOWN_FILE_EXTENSION` on start | Node is too old, check `node -v` (needs ≥ 24) |
-| agent panel opens but asks to log in | log in once with that CLI (`claude`, `codex`...) outside coban, using the same `CLAUDE_CONFIG_DIR` as the profile |
+| agent shows `✗ hata` (error) | it can't work at all: logged out (`cursor-agent login`, `codex login`), expired token, or its model provider rejects requests. coban tells the orchestrator, which should move the task. For Claude, log in with the profile's `CLAUDE_CONFIG_DIR` |
 | a profile is missing | its CLI is not on `PATH` when coban first ran: install it and delete the config file, or add the profile by hand |
 | `coban çalışmıyor` from a `coban ...` command | open the TUI first with plain `coban`: those commands talk to the running app |
 | stale socket after a crash | `rm ~/.coban/coban.sock` |
-| Codex cannot talk to coban | its sandbox may block the unix socket, see Known gaps |
+| Codex: `coban: connect EPERM` | coban launches codex with `--sandbox workspace-write -c sandbox_workspace_write.network_access=true` so it can reach the socket; if your profile sets its own `--sandbox`, it must allow that too |
+| Cursor asks before every `coban` call | add `"Shell(coban)"` to `permissions.allow` in `~/.cursor/cli-config.json`, or answer from coban's approval box |
 
 ### From source (development)
 
@@ -217,7 +218,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out.
 ## Known gaps
 
 No scrollback in the chat, no split view, no kitty keyboard protocol (shift+enter), no session restore yet.
-Codex's sandbox may block the unix socket. Status detection is screen heuristics and may need tuning per CLI
+Status detection is screen heuristics and may need tuning per CLI
 version. coban captures the mouse: to copy text press `ctrl+b s`, or use your terminal's override (shift-drag in
 Ghostty/cmux, ⌥-drag in iTerm2).
 

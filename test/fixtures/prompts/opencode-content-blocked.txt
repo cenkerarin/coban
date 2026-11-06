@@ -1,0 +1,32 @@
+  ┃  İletişim (kabukta):                                                                                      
+  ┃  - `coban inbox` → sana gelen mesajlar + ORTAK KUTUDAKİ yeni notlar. Her büyük adımdan sonra ve           
+  ┃  başkalarının da kullandığı bir dosyayı değiştirmeden önce MUTLAKA çalıştır; bir not işini etkiliyorsa    
+  ┃  ona göre davran.                                                                                         
+  ┃  - `coban post all "..."` → ortak kutuya kısa not: başkalarını etkileyen her şeyi yaz (değiştirdiğin      
+  ┃  arayüz/şema/fonksiyon imzası, üzerinde çalıştığın dosyalar, önemli karar). Tek satır, net.               
+  ┃  - `coban post <id> "..."` → tek bir agent'a mesaj (liste: `coban agents`).                               
+  ┃  Görevde "İLGİLİ KOD" bölümü varsa güncel kabul et: o kısımları yeniden okuma veya arama, sadece eksik    
+  ┃  kalan yer için oku. Repo yapısı için tek seferde `coban map` kullan.                                     
+  ┃  Bitince orkestratöre EN FAZLA 5 satırlık özet gönder: `coban post user "..."`. Ayrıntı (uzun rapor,      
+  ┃  liste, diff açıklaması) gerekiyorsa .coban/reports/opencode.md dosyasına yaz ve özette sadece yolunu     
+  ┃  ver. Belirsizlik olursa orkestratöre kısa bir soru gönder.                                               
+  ┃                                                                                                           
+  ┃  GÖREV:                                                                                                   
+  ┃  Sadece "selam" yaz.                                                                                      
+  ┃                                                                                                           
+                                                                                                              
+  ┃                                                                                                           
+  ┃  Bad Request: {"error":{"code":"content-blocked","message":"content-blocked (request id:                  
+  ┃  2026110622565648840870972v5hQY4nW6dQ)","param":"","type":"agent_router_api_error"}}                      
+  ┃                                                                                                           
+                                                                                                              
+     ▣  Build · Claude Opus 4.8                                                                               
+                                                                                                              
+  ┃                                                                                                           
+  ┃                                                                                                           
+  ┃                                                                                                           
+  ┃  Build · Claude Opus 4.8 AgentRouter · medium                                                             
+  ╹▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀▀  
+   /tmp/   tab agentsctrl+p         
+   scratchpad/probe                                                                            commands       
+

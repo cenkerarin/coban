@@ -6,7 +6,7 @@ import { parsePrompt } from './prompt.ts';
 
 const { Terminal } = xterm;
 
-export type Status = 'starting' | 'working' | 'blocked' | 'limited' | 'idle' | 'exited';
+export type Status = 'starting' | 'working' | 'blocked' | 'limited' | 'error' | 'idle' | 'exited';
 export type Role = 'orchestrator' | 'worker' | 'manual';
 
 export type Msg = { id: number; from: string; to: string; text: string; ts: number; delivered: boolean };
@@ -42,6 +42,28 @@ export function limitBanner(screen: string): boolean {
 export function maskLimitText(text: string): string {
   return text.replace(LIMIT_WORDS, (m) => `[${m.replace(/limit/gi, 'l*mit')}]`);
 }
+// The CLI can't work at all: logged out / expired token, or its model provider rejects every request. Without this a
+// failed agent looks 'idle' (finished) or stays 'starting' forever (Cursor's animated login screen), and the
+// orchestrator waits for a summary that never comes. Seen on real screens: Cursor "Press any key to log in...",
+// Codex "■ Your access token could not be refreshed … Please log out and sign in again.", OpenCode
+// "Bad Request: {"error":{"code":"content-blocked",…,"type":"agent_router_api_error"}}".
+// Codex prints non-fatal MCP startup warnings (⚠, incl. an HTTP 401 JSON body); those must not match.
+// Line-anchored (after an optional status glyph), like LIMIT_BANNER: the same words mid-sentence must not match.
+const AGENT_ERROR = /^(?:[■✗✖×!]\s*)?(?:error:?\s*)?(?:Press any key to log in|Your access token could not be refreshed|(?:you are )?not (?:logged|signed) in(?:\s*[.!:(]|\s*$)|authentication (?:failed|required)|please run `?[\w-]+ (?:auth )?login|(?:Bad Request|Unauthorized|Forbidden|Payment Required|Service Unavailable):?\s*\{\s*"error")/i;
+const ERROR_TAIL_LINES = 12;
+
+// The error line, if the bottom of the screen shows one (box glyphs stripped, at most 160 chars).
+export function agentError(screen: string): string | null {
+  const lines = screen.split('\n').filter((l) => l.trim()).slice(-ERROR_TAIL_LINES);
+  let warning = false; // inside a ⚠ block (Codex wraps a warning's JSON over many lines)
+  for (const raw of lines) {
+    const l = raw.replace(/^[\s┃│║▌]+|[\s┃│║▐]+$/g, '');
+    if (/^⚠/.test(l)) { warning = true; continue; }
+    if (/^[■●•›>✗✖×]/.test(l) || !/^\s/.test(raw)) warning = false;
+    if (!warning && AGENT_ERROR.test(l)) return l.slice(0, 160);
+  }
+  return null;
+}
 const BUSY = /esc to interrupt|esc to cancel|ctrl\+c to (interrupt|stop)|Working \(|Thinking\.\.\./i;
 const QUIET_MS = 1500;
 
@@ -61,6 +83,8 @@ export class Agent extends EventEmitter {
   exitCode: number | null = null;
   inbox: Msg[] = [];
   model = '';
+  error = '';           // the error line while status is 'error'
+  errorNotified = '';   // last error line already reported to the orchestrator/user
   briefed = false;      // has received the coban worker brief
   handedOff = false;    // hit a limit and its task was already handed to another account (hub.handoff)
 
@@ -109,13 +133,16 @@ export class Agent extends EventEmitter {
     if (this.status === 'exited') return;
     const tail = this.screenText(18);
     let next: Status;
+    const err = BUSY.test(tail) ? null : agentError(tail);
     if (limitBanner(tail) && !BUSY.test(tail)) next = 'limited';
+    else if (err) next = 'error';
     else if (waitingForAnswer(tail)) next = 'blocked';
     // A visible "esc to interrupt" means real work, even right after launch (workers get their task as an argv
     // prompt and never pass through idle). Bare output without it is still startup noise.
     else if (BUSY.test(tail)) next = 'working';
     else if (Date.now() - this.lastOutput < QUIET_MS) next = this.status === 'starting' ? 'starting' : 'working';
     else next = 'idle';
+    this.error = next === 'error' ? err! : '';
     this.setStatus(next);
   }
 
