@@ -60,13 +60,26 @@ accounts are just different `CLAUDE_CONFIG_DIR`s:
 ```json
 {
   "orchestrator": "h1",
+  "orchestratorModel": "claude-sonnet-5-5",
   "profiles": [
-    { "id": "h1", "title": "Claude H1", "cmd": "claude --model claude-opus-5-5 --allowedTools 'Bash(coban:*)'",
+    { "id": "h1", "title": "Claude H1", "cmd": "claude --allowedTools 'Bash(coban:*)'", "model": "claude-opus-5-5",
       "promptArg": "-- {prompt}", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-hesap1" }, "color": "#F6D5C8" },
+    { "id": "h2", "title": "Claude H2", "cmd": "claude --allowedTools 'Bash(coban:*)'", "model": "claude-sonnet-5-5",
+      "promptArg": "-- {prompt}", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-hesap2" } },
     { "id": "codex", "title": "Codex", "cmd": "codex", "promptArg": "{prompt}" }
   ]
 }
 ```
+
+`model` is appended as `--model <model>`. `orchestratorModel` overrides it for whichever profile you pick as
+orchestrator — coordination is mostly reading and routing, so a cheaper model there saves the most.
+
+## Keeping context small
+
+Every CLI output lands in the calling agent's context and is re-read on each later request, so coban keeps it lean:
+one-line outputs (`--json` for raw), `coban read` defaults to 20 lines with Claude Code/Codex UI chrome stripped
+(`--raw` to keep it), and the prompts tell workers to send ≤5-line summaries and put long results in
+`.coban/reports/<id>.md` (git-ignored automatically) instead of having the orchestrator read their screens.
 
 ## Keys
 

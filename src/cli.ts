@@ -11,11 +11,13 @@ Agent'ların içinden (veya başka bir terminalden):
   coban send <id> "<mesaj>"           (post ile aynı)
   coban post <id|user> "<mesaj>"
   coban wait [id...] [--timeout sn]   biri durunca / mesaj gelince döner
-  coban read <id> [--lines n] [--scrollback]
+  coban read <id> [--lines n] [--scrollback] [--raw]
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
   coban kill <id>
   coban inbox
-  coban log [--limit n]`;
+  coban log [--limit n]
+
+Her komut --json ile ham çıktı verir.`;
 
 function call(method: string, params: object): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -34,6 +36,8 @@ function call(method: string, params: object): Promise<any> {
   });
 }
 
+const BOOL_FLAGS = ['scrollback', 'raw', 'json'];
+
 function parse(argv: string[]) {
   const pos: string[] = [];
   const flags: Record<string, string | true> = {};
@@ -42,7 +46,7 @@ function parse(argv: string[]) {
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=', 2);
       if (v !== undefined) flags[k] = v;
-      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && k !== 'scrollback') flags[k] = argv[++i];
+      else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !BOOL_FLAGS.includes(k)) flags[k] = argv[++i];
       else flags[k] = true;
     } else pos.push(a);
   }
@@ -71,25 +75,57 @@ async function main() {
     return;
   }
 
-  let r: any;
+  // Output is plain one-liners on purpose: it lands in the calling agent's context. --json gives the raw result.
+  const json = !!flags.json;
+  const print = (r: unknown, text: () => string) => console.log(json ? JSON.stringify(r) : text());
+  const short = (m?: string) => (m ? m.replace(/^claude-/, '') : '');
+  const one = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const agentLine = (a: any) =>
+    [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : '', a.status,
+      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
+      .filter(Boolean).join('  ');
+
   switch (cmd) {
-    case 'agents': r = await call('agents', {}); break;
-    case 'spawn': r = await call('spawn', { profile: pos[0], task: pos.slice(1).join(' '), name: flags.name, cwd: flags.cwd }); break;
-    case 'send': case 'post': r = await call('post', { to: pos[0], text: pos.slice(1).join(' ') }); break;
-    case 'wait': r = await call('wait', { ids: pos, timeout: num(flags.timeout) }); break;
-    case 'read': {
-      r = await call('read', { id: pos[0], lines: num(flags.lines), scrollback: !!flags.scrollback });
-      console.log(`[${r.id} · ${r.status}]\n${r.screen}`);
-      return;
+    case 'agents': {
+      const r = await call('agents', {});
+      return print(r, () => [...r.agents.map(agentLine), 'profiller: ' + r.profiles.map((p: any) => `${p.id}${p.model ? '/' + short(p.model) : ''}`).join(' ')].join('\n'));
     }
-    case 'key': r = await call('key', { id: pos[0], keys: pos.slice(1) }); break;
-    case 'kill': r = await call('kill', { id: pos[0] }); break;
-    case 'inbox': r = await call('inbox', {}); break;
-    case 'log': r = await call('log', { limit: num(flags.limit) }); break;
+    case 'spawn': {
+      const r = await call('spawn', { profile: pos[0], task: pos.slice(1).join(' '), name: flags.name, cwd: flags.cwd });
+      return print(r, () => `açıldı: ${r.id}`);
+    }
+    case 'send': case 'post': {
+      const r = await call('post', { to: pos[0], text: pos.slice(1).join(' ') });
+      return print(r, () => `gönderildi → ${pos[0]}`);
+    }
+    case 'wait': {
+      const r = await call('wait', { ids: pos, timeout: num(flags.timeout) });
+      return print(r, () => {
+        if (r.timeout) return 'zaman aşımı · ' + r.agents.map((a: any) => `${a.id}:${a.status}`).join(' ');
+        const out: string[] = [];
+        if (r.settled.length) out.push('durdu: ' + r.settled.map((a: any) => `${a.id} ${a.status}`).join(', '));
+        if (r.removed.length) out.push('artık yok: ' + r.removed.join(', '));
+        for (const m of r.messages) out.push(`✉ ${m.from}: ${m.text}`);
+        return out.join('\n');
+      });
+    }
+    case 'read': {
+      const r = await call('read', { id: pos[0], lines: num(flags.lines), scrollback: !!flags.scrollback, raw: !!flags.raw });
+      return print(r, () => `[${r.id} · ${r.status}]\n${r.screen}`);
+    }
+    case 'key': { const r = await call('key', { id: pos[0], keys: pos.slice(1) }); return print(r, () => 'tamam'); }
+    case 'kill': { const r = await call('kill', { id: pos[0] }); return print(r, () => `kapatıldı: ${pos[0]}`); }
+    case 'inbox': {
+      const r = await call('inbox', {});
+      return print(r, () => (r.messages.length ? r.messages.map((m: any) => `✉ ${m.from}: ${m.text}`).join('\n') : '(gelen kutusu boş)'));
+    }
+    case 'log': {
+      const r = await call('log', { limit: num(flags.limit) });
+      return print(r, () => r.messages.map((m: any) => `${new Date(m.ts).toTimeString().slice(0, 5)} ${m.from}→${m.to}: ${one(m.text)}`).join('\n'));
+    }
     case 'help': case '-h': case '--help': console.log(HELP); return;
     default: console.error(HELP); process.exit(2);
   }
-  console.log(JSON.stringify(r, null, 2));
 }
 
 main().catch((e) => { console.error('coban: ' + e.message); process.exit(1); });

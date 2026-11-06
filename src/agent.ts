@@ -31,6 +31,7 @@ export class Agent extends EventEmitter {
   cursorVisible = true;
   exitCode: number | null = null;
   inbox: Msg[] = [];
+  model = '';
 
   constructor(o: { id: string; profile: Profile; role: Role; task: string; cwd: string; cmd: string; env: Record<string, string>; cols: number; rows: number }) {
     super();

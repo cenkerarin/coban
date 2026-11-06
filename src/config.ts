@@ -6,12 +6,17 @@ export type Profile = {
   id: string;
   title: string;
   cmd: string;                       // shell command that starts the agent
+  model?: string;                    // appended as `--model <model>` (claude, codex, opencode and cursor-agent all accept it)
   promptArg?: string;                // how an initial task is passed, "{prompt}" is replaced (already quoted)
   env?: Record<string, string>;
   color?: string;
 };
 
-export type Config = { orchestrator: string; profiles: Profile[] };
+export type Config = {
+  orchestrator: string;          // profile preselected in the orchestrator picker
+  orchestratorModel?: string;    // overrides the profile's model when it runs as orchestrator
+  profiles: Profile[];
+};
 
 export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 export const BIN_DIR = path.join(ROOT, 'bin');
@@ -19,12 +24,16 @@ export const STATE_DIR = path.join(os.homedir(), '.coban');
 export const SOCK = process.env.COBAN_SOCK || path.join(STATE_DIR, 'coban.sock');
 export const CONFIG_PATH = process.env.COBAN_CONFIG || path.join(os.homedir(), '.config', 'coban', 'config.json');
 
+export const OPUS = 'claude-opus-5-5';
+export const SONNET = 'claude-sonnet-5-5';
+
 // Claude may run `coban ...` without a permission prompt.
-const OPUS = "claude --model claude-opus-5-5 --allowedTools 'Bash(coban:*)'";
-const claude = (n: number, color: string): Profile => ({
+const CLAUDE_CMD = "claude --allowedTools 'Bash(coban:*)'";
+const claude = (n: number, model: string, color: string): Profile => ({
   id: `h${n}`,
   title: `Claude H${n}`,
-  cmd: OPUS,
+  cmd: CLAUDE_CMD,
+  model,
   promptArg: '-- {prompt}',
   env: { CLAUDE_CONFIG_DIR: `~/.claude-hesap${n}` },
   color,
@@ -32,10 +41,13 @@ const claude = (n: number, color: string): Profile => ({
 
 export const DEFAULT_CONFIG: Config = {
   orchestrator: 'h1',
+  // Coordination is mostly reading and routing, so the orchestrator runs on Sonnet;
+  // h1 keeps Opus for heavy coding work when it runs as a worker.
+  orchestratorModel: SONNET,
   profiles: [
-    claude(1, '#F6D5C8'),
-    claude(2, '#FFD9A0'),
-    claude(3, '#C8E6C9'),
+    claude(1, OPUS, '#F6D5C8'),
+    claude(2, SONNET, '#FFD9A0'),
+    claude(3, SONNET, '#C8E6C9'),
     { id: 'codex', title: 'Codex', cmd: 'codex', promptArg: '{prompt}', color: '#8FDBFF' },
     { id: 'opencode', title: 'OpenCode', cmd: 'opencode', promptArg: '--prompt {prompt}', color: '#B5E48C' },
     { id: 'cursor', title: 'Cursor', cmd: 'cursor-agent', promptArg: '{prompt}', color: '#D0B3FF' },
@@ -51,6 +63,9 @@ export function loadConfig(): Config {
   }
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
   for (const p of cfg.profiles) {
+    // Older configs baked the model into cmd; lift it into `model` so overrides work.
+    const m = p.cmd.match(/\s--model[ =](\S+)/);
+    if (m) { p.model ??= m[1]; p.cmd = p.cmd.replace(m[0], ''); }
     for (const k of Object.keys(p.env ?? {})) p.env![k] = expand(p.env![k]);
   }
   return cfg;

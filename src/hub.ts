@@ -7,35 +7,60 @@ import { BIN_DIR, SOCK, STATE_DIR, type Config, type Profile } from './config.ts
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'exited'];
 
-const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı terminal uygulamasının ORKESTRATÖRÜsün (kimliğin: ${id}). Kullanıcı seninle bu panelde konuşuyor; diğer panellerde senin açtığın işçi agent'lar çalışıyor. İşin: kullanıcının isteğini bağımsız parçalara bölmek, parçaları işçilere dağıtmak, onları izlemek ve sonuçları birleştirip kullanıcıya raporlamak.
+const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı terminal uygulamasının ORKESTRATÖRÜsün (kimliğin: ${id}). Kullanıcı seninle bu panelde konuşuyor; diğer panellerde senin açtığın işçi agent'lar çalışıyor. İşin: isteği bağımsız parçalara bölmek, işçilere dağıtmak, izlemek, sonuçları birleştirip kullanıcıya raporlamak. Kod yazma işini işçilere bırak.
 
-İşçileri Bash üzerinden \`coban\` komutuyla yönetirsin (izin sormadan çalışır):
-  coban agents                         → tüm agent'lar, profilleri ve durumları (starting/working/blocked/limited/idle/exited)
-  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin]   → yeni işçi açar, görevi verir
-  coban send <id> "<mesaj>"            → işçiye mesaj/ek talimat (meşgulse boşalınca iletilir)
-  coban wait [id...] [--timeout 300]   → bir işçi durunca (bitti/izin bekliyor/limit) veya sana mesaj gelince döner
-  coban read <id> [--lines 60]         → işçinin ekranını okur
-  coban key <id> <tuş>                 → tuş gönderir: enter, esc, up, down, tab, 1, 2, y ...
-  coban kill <id>                      → işçiyi kapatır
-  coban inbox                          → sana gelen okunmamış mesajlar
-  coban post user "<mesaj>"            → kullanıcıya durum çubuğunda bildirim
+İşçileri Bash'te \`coban\` ile yönetirsin (izin sormadan çalışır, çıktılar kısa ve tek satırlıktır):
+  coban agents                         agent'lar: id, profil, model, durum (working/blocked/limited/idle/exited)
+  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin]
+  coban send <id> "<mesaj>"            meşgulse boşalınca iletilir
+  coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
+  coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
+  coban key <id> <tuş...>              enter, esc, up, down, tab, 1, 2, y ...
+  coban kill <id>  ·  coban inbox  ·  coban post user "<mesaj>"
 
-Profiller: ${profiles.map((p) => `${p.id} (${p.title})`).join(', ')}.
+Profiller: ${profiles.map((p) => `${p.id} (${p.title}${p.model ? ', ' + p.model : ''})`).join(', ')}.
+
+CONTEXT'İ KORU — her çağrının çıktısı bağlamına eklenir ve sonraki her istekte yeniden okunur:
+- Sonucu işçinin göndereceği özetten öğren. \`coban read\`'i yalnızca işçi "blocked" iken veya özet anlamsızsa kullan; --lines'ı küçük tut.
+- İşçiler uzun sonuçları .coban/reports/<id>.md dosyasına yazar ve sana yolunu gönderir. O dosyayı ancak gerçekten gerekiyorsa, gerekirse yalnızca ilgili kısmını oku.
+- Beklerken uzun timeout kullan (\`coban wait --timeout 600\`), arka arkaya \`coban agents\` çağırma.
+- Görevleri kısa ve kendi içinde yeterli yaz: işçiye neyi, nerede, hangi kısıtla yapacağını söyle; dosyaları senin yerine o okusun.
+- İşi biten işçiyi \`coban kill\` ile kapat. Alakasız yeni bir iş için eski işçiyi kullanma, yeni işçi aç.
 
 Kurallar:
-- İşi gerçekten paralel yürüyebilecek parçalara böl. Aynı dosyalara yazacak iki işçi açma; gerekiyorsa her işçiye ayrı git worktree kullandır.
-- Claude hesaplarını (h1/h2/h3) dengeli kullan; bir işçi "limited" olursa işini başka hesaba devret.
-- spawn'dan sonra \`coban wait\` ile bekle; döndüğünde ilgili işçinin ekranını \`coban read\` ile oku.
-- "blocked" işçide izin sorusu vardır: güvenli ve görev kapsamındaysa \`coban key\` ile onayla, emin değilsen kullanıcıya sor.
-- İşçiler birbirine \`coban post\` ile yazabilir; gerektiğinde onları birbirine yönlendir.
-- Bittiğinde sonuçları doğrula, kullanıcıya kısa özet ver, işi biten işçileri kapat.`;
+- Aynı dosyalara yazacak iki işçi açma; gerekiyorsa ayrı git worktree kullandır.
+- Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan. "limited" olan işçinin işini başka hesaba devret.
+- "blocked" işçinin izin sorusunu güvenli ve görev kapsamındaysa \`coban key\` ile onayla, emin değilsen kullanıcıya sor.
+- Bitince sonucu doğrula ve kullanıcıya kısa özet ver.`;
 
 const WORKER_PREAMBLE = (id: string, orch: string) => `[coban] Sen coban içinde çalışan bir işçi agent'sın. Kimliğin: ${id}. Orkestratör: ${orch}.
-Başka agent'larla konuşmak için kabukta: \`coban post <id> "mesaj"\` (liste: \`coban agents\`, gelen kutun: \`coban inbox\`).
-Görevin bitince orkestratöre kısa bir özet gönder: \`coban post ${orch} "..."\`. Belirsizlik olursa orkestratöre sor.
+Diğer agent'larla kabukta konuşursun: \`coban post <id> "mesaj"\` (liste: \`coban agents\`, gelen kutun: \`coban inbox\`).
+Bitince orkestratöre EN FAZLA 5 satırlık özet gönder: \`coban post ${orch} "..."\`. Ayrıntı (uzun rapor, liste, diff açıklaması) gerekiyorsa .coban/reports/${id}.md dosyasına yaz ve özette sadece yolunu ver. Belirsizlik olursa orkestratöre kısa bir soru gönder.
 
 GÖREV:
 `;
+
+// Lines that are Claude Code / Codex chrome rather than content.
+const CHROME = /^\s*([─━═╌┄\-]{8,}|❯\s*$|>\s*$|[⏵►▶]{2}|\? for shortcuts|Tip:|auto mode|accept edits|bypass permissions|plan mode|Context left|\/model to|↵ send)/;
+
+// Workers write long reports to <cwd>/.coban/reports; the folder ignores itself so it never gets committed.
+function ensureReportsDir(cwd: string) {
+  try {
+    fs.mkdirSync(`${cwd}/.coban/reports`, { recursive: true });
+    if (!fs.existsSync(`${cwd}/.coban/.gitignore`)) fs.writeFileSync(`${cwd}/.coban/.gitignore`, '*\n');
+  } catch {}
+}
+
+export function compactScreen(text: string, lines: number): string {
+  const out: string[] = [];
+  for (const l of text.split('\n')) {
+    if (CHROME.test(l)) continue;
+    if (!l.trim() && (!out.length || !out[out.length - 1].trim())) continue; // collapse blank runs
+    out.push(l.replace(/\s+$/, ''));
+  }
+  while (out.length && !out[out.length - 1].trim()) out.pop();
+  return out.slice(-lines).join('\n');
+}
 
 export class Hub extends EventEmitter {
   cfg: Config;
@@ -71,6 +96,8 @@ export class Hub extends EventEmitter {
     const p = this.profile(o.profile);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
     const parts = [p.cmd];
+    const model = (o.role === 'orchestrator' && this.cfg.orchestratorModel) || p.model;
+    if (model) parts.push(`--model ${q(model)}`);
     if (o.role === 'orchestrator' && p.cmd.startsWith('claude')) parts.push(`--append-system-prompt ${q(ORCH_PROMPT(id, this.cfg.profiles))}`);
     let task = o.task?.trim() ?? '';
     if (task && o.role === 'worker') task = WORKER_PREAMBLE(id, this.orchestratorId || 'user') + task;
@@ -86,7 +113,10 @@ export class Hub extends EventEmitter {
     };
     delete env.CLAUDECODE; // don't let a parent Claude session leak into children
 
-    const a = new Agent({ id, profile: p, role: o.role, task: o.task ?? '', cwd: o.cwd || process.cwd(), cmd: parts.join(' '), env, ...this.size });
+    const cwd = o.cwd || process.cwd();
+    if (o.role === 'worker') ensureReportsDir(cwd);
+    const a = new Agent({ id, profile: p, role: o.role, task: o.task ?? '', cwd, cmd: parts.join(' '), env, ...this.size });
+    a.model = model ?? '';
     a.on('render', () => this.emit('render', a));
     a.on('status', (s: Status) => {
       if (SETTLED.includes(s)) {
@@ -191,21 +221,31 @@ export class Hub extends EventEmitter {
   list() {
     return this.order.map((id) => {
       const a = this.agents.get(id)!;
-      return { id, profile: a.profile.id, role: a.role, status: a.status, cwd: a.cwd, task: a.task.slice(0, 120), unreadMessages: a.inbox.filter((m) => !m.delivered).length };
+      return {
+        id, profile: a.profile.id, model: a.model, role: a.role, status: a.status,
+        ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
+        task: a.task.replace(/\s+/g, ' ').slice(0, 60),
+        unreadMessages: a.inbox.filter((m) => !m.delivered).length,
+      };
     });
   }
 
   // ── RPC over unix socket (used by the `coban` CLI inside agents) ─────
   async handle(caller: string, method: string, p: any): Promise<unknown> {
     switch (method) {
-      case 'agents': return { agents: this.list(), profiles: this.cfg.profiles.map(({ id, title }) => ({ id, title })) };
+      case 'agents': return { agents: this.list(), profiles: this.cfg.profiles.map(({ id, title, model }) => ({ id, title, model })) };
       case 'spawn': {
         const a = this.spawn({ profile: p.profile, role: 'worker', task: p.task, name: p.name, cwd: p.cwd });
         return { id: a.id };
       }
       case 'send':
       case 'post': return { ok: true, id: this.post(caller, p.to, p.text).id };
-      case 'read': return { id: p.id, status: this.get(p.id).status, screen: this.get(p.id).screenText(p.lines ?? 60, !!p.scrollback) };
+      case 'read': {
+        const a = this.get(p.id);
+        const n = p.lines ?? 20;
+        const screen = p.raw ? a.screenText(n, !!p.scrollback) : compactScreen(a.screenText(n * 3, !!p.scrollback), n);
+        return { id: a.id, status: a.status, screen };
+      }
       case 'key': {
         const a = this.get(p.id);
         for (const k of p.keys as string[]) { a.proc.write(keyBytes(a, k)); await new Promise((r) => setTimeout(r, 120)); }
