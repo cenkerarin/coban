@@ -132,8 +132,13 @@ export class Hub extends EventEmitter {
     // orchestratorModel is a Claude model id: applying it to codex/opencode/cursor breaks them ("model not supported").
     const model = (o.role === 'orchestrator' && p.cmd.startsWith('claude') && this.cfg.orchestratorModel) || p.model;
     if (model) parts.push(`--model ${q(model)}`);
-    if (o.role === 'orchestrator' && p.cmd.startsWith('claude')) parts.push(`--append-system-prompt ${q(ORCH_PROMPT(id, this.cfg.profiles))}`);
     let task = o.task?.trim() ?? '';
+    if (o.role === 'orchestrator') {
+      const brief = ORCH_PROMPT(id, this.cfg.profiles);
+      if (p.cmd.startsWith('claude')) parts.push(`--append-system-prompt ${q(brief)}`);
+      // Any other CLI (codex, opencode, cursor, gemini, ...) has no portable system-prompt flag: brief it as its first message.
+      else task = brief + '\n\nBu talimatı oku ve yalnızca "hazır" de; kullanıcının isteğini bekle.' + (task ? '\n\n' + task : '');
+    }
     if (task && o.role === 'worker') task = WORKER_PREAMBLE(id, this.orchestratorId || 'user') + task;
     if (task) parts.push((p.promptArg ?? '{prompt}').replace('{prompt}', q(task)));
 
