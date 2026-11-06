@@ -33,7 +33,10 @@ and those agents can **message each other**.
 
 ```
 coban agents                                   list agents + status
-coban spawn <profile> "<task>" [--name x] [--cwd dir]
+coban map [subdir]                             repo map: files, line counts, symbol:line
+coban spawn <profile> "<task>" [--name x] [--cwd dir] [--ctx where]...
+                                               --ctx "file#sym1,sym2" | "file:10-80" | "file"
+                                               inlines that code (line-numbered) into the task
 coban post <id|user> "<message>"               (alias: send) queued until the target is idle
 coban post all "<note>"                        shared board: everyone sees it
 coban inbox                                    your direct messages + board notes you haven't seen
@@ -95,6 +98,17 @@ Every CLI output lands in the calling agent's context and is re-read on each lat
 one-line outputs (`--json` for raw), `coban read` defaults to 20 lines with Claude Code/Codex UI chrome stripped
 (`--raw` to keep it), and the prompts tell workers to send ≤5-line summaries and put long results in
 `.coban/reports/<id>.md` (git-ignored automatically) instead of having the orchestrator read their screens.
+
+### Precise tasks
+
+Each request a worker makes re-reads its whole context (~45k tokens of Claude Code baseline before any work), so a
+request spent *searching* is expensive while code handed over in the task is cheap. The orchestrator therefore:
+
+- learns the repo from `coban map` (≈400 tokens for this repo) instead of reading files,
+- passes the relevant code with `--ctx` — coban resolves symbols/line ranges itself (no model involved) and inlines
+  them, capped at 400 lines; workers are told not to re-read it,
+- writes tasks as **HEDEF / DOSYALAR / KISITLAR / DOĞRULAMA / BİTTİ SAYILIR** (goal, files, constraints,
+  verification, done-when).
 
 ## Keys
 

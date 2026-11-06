@@ -1,5 +1,6 @@
 import net from 'node:net';
 import { loadConfig, SOCK } from './config.ts';
+import { repoMap, snippets } from './context.ts';
 
 const HELP = `coban — çok hesaplı agent orkestratörü
 
@@ -7,7 +8,10 @@ const HELP = `coban — çok hesaplı agent orkestratörü
 
 Agent'ların içinden (veya başka bir terminalden):
   coban agents                        agent listesi ve durumları
-  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin]
+  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
+                                      --ctx: "dosya:10-80" | "dosya#sembol1,sembol2" | "dosya"
+                                      ilgili kodu satır numaralı olarak görevin içine ekler (send/post'ta da var)
+  coban map [alt-dizin]               repo haritası: dosyalar, satır sayıları, semboller:satır
   coban send <id> "<mesaj>"           (post ile aynı)
   coban post <id|user|all> "<mesaj>"  all = ortak kutu (herkes görür)
   coban wait [id...] [--timeout sn]   biri durunca / mesaj gelince döner
@@ -42,21 +46,23 @@ const BOOL_FLAGS = ['scrollback', 'raw', 'json'];
 function parse(argv: string[]) {
   const pos: string[] = [];
   const flags: Record<string, string | true> = {};
+  const ctx: string[] = []; // --ctx may repeat
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i];
     if (a.startsWith('--')) {
       const [k, v] = a.slice(2).split('=', 2);
+      if (k === 'ctx') { const val = v ?? argv[++i]; if (val) ctx.push(val); continue; }
       if (v !== undefined) flags[k] = v;
       else if (argv[i + 1] && !argv[i + 1].startsWith('--') && !BOOL_FLAGS.includes(k)) flags[k] = argv[++i];
       else flags[k] = true;
     } else pos.push(a);
   }
-  return { pos, flags };
+  return { pos, flags, ctx };
 }
 
 async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
-  const { pos, flags } = parse(rest);
+  const { pos, flags, ctx } = parse(rest);
   const num = (v: unknown) => (v === undefined || v === true ? undefined : Number(v));
 
   if (!cmd || cmd === '--cwd') {
@@ -92,11 +98,12 @@ async function main() {
       return print(r, () => [...r.agents.map(agentLine), 'profiller: ' + r.profiles.map((p: any) => `${p.id}${p.model ? '/' + short(p.model) : ''}`).join(' ')].join('\n'));
     }
     case 'spawn': {
-      const r = await call('spawn', { profile: pos[0], task: pos.slice(1).join(' '), name: flags.name, cwd: flags.cwd });
+      const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
+      const r = await call('spawn', { profile: pos[0], task: pos.slice(1).join(' ') + snippets(ctx, cwd), name: flags.name, cwd: flags.cwd });
       return print(r, () => `açıldı: ${r.id}`);
     }
     case 'send': case 'post': {
-      const r = await call('post', { to: pos[0], text: pos.slice(1).join(' ') });
+      const r = await call('post', { to: pos[0], text: pos.slice(1).join(' ') + snippets(ctx, process.cwd()) });
       return print(r, () => `gönderildi → ${pos[0]}`);
     }
     case 'wait': {
@@ -130,6 +137,7 @@ async function main() {
       const r = await call('log', { limit: num(flags.limit) });
       return print(r, () => r.messages.map((m: any) => `${new Date(m.ts).toTimeString().slice(0, 5)} ${m.from}→${m.to}: ${one(m.text)}`).join('\n'));
     }
+    case 'map': console.log(repoMap(process.cwd(), pos[0] ?? '')); return;
     case 'help': case '-h': case '--help': console.log(HELP); return;
     default: console.error(HELP); process.exit(2);
   }

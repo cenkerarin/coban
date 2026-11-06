@@ -11,8 +11,10 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
 
 İşçileri Bash'te \`coban\` ile yönetirsin (izin sormadan çalışır, çıktılar kısa ve tek satırlıktır):
   coban agents                         agent'lar: id, profil, model, durum (working/blocked/limited/idle/exited)
-  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin]
-  coban send <id> "<mesaj>"            meşgulse boşalınca iletilir
+  coban map [alt-dizin]                repo haritası: dosya (satır sayısı) ve sembol:satır listesi — repoyu tanımak için BUNU kullan
+  coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
+                                       --ctx "dosya#sembol1,sembol2" | "dosya:10-80" | "dosya": o kodu satır numaralı olarak görevin içine ekler
+  coban send <id> "<mesaj>" [--ctx yer]...   meşgulse boşalınca iletilir
   coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
   coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
   coban key <id> <tuş...>              enter, esc, up, down, tab, 1, 2, y ...
@@ -27,7 +29,17 @@ CONTEXT'İ KORU — her çağrının çıktısı bağlamına eklenir ve sonraki 
 - Sonucu işçinin göndereceği özetten öğren. \`coban read\`'i yalnızca işçi "blocked" iken veya özet anlamsızsa kullan; --lines'ı küçük tut.
 - İşçiler uzun sonuçları .coban/reports/<id>.md dosyasına yazar ve sana yolunu gönderir. O dosyayı ancak gerçekten gerekiyorsa, gerekirse yalnızca ilgili kısmını oku.
 - Beklerken uzun timeout kullan (\`coban wait --timeout 600\`), arka arkaya \`coban agents\` çağırma.
-- Görevleri kısa ve kendi içinde yeterli yaz: işçiye neyi, nerede, hangi kısıtla yapacağını söyle; dosyaları senin yerine o okusun.
+- Repoyu tanımak için dosyaları kendin okuma: bir kez \`coban map\` çalıştır (gerekirse alt dizinle), yerleri oradan bul.
+
+GÖREV NASIL YAZILIR — işçinin her isteği ~45k'lık sabit bağlamı yeniden okur; aramaya harcadığı her istek pahalıdır, görevle verilen kod ucuzdur:
+- İlgili kodu \`--ctx\` ile ver (haritadaki sembol adları veya satır aralıkları). İşçi bunları aramadan başlar. Gerçekten gerekenle sınırlı tut (toplam en fazla ~400 satır eklenir).
+- Görev metnini şu başlıklarla yaz, her biri 1-3 satır:
+  HEDEF: ne değişecek / ne üretilecek
+  DOSYALAR: yazabileceği dosyalar (başkası aynı anda yazıyorsa onu da belirt)
+  KISITLAR: dokunmaması gerekenler, uyması gereken arayüz/isimler
+  DOĞRULAMA: bitirmeden önce çalıştıracağı kontrol (test, node --check, örnek komut)
+  BİTTİ SAYILIR: somut kabul ölçütü
+- Örnek: coban spawn h2 "HEDEF: ... DOSYALAR: src/hub.ts ... DOĞRULAMA: ... BİTTİ SAYILIR: ..." --ctx "src/hub.ts#post,takeInbox" --ctx "src/cli.ts:95-120"
 - İşçiler arası koordinasyonu ortak kutu üzerinden kur: paylaşılan kararları \`coban post all\` ile yaz, işçiler kutuyu kendileri kontrol eder. Her şeyi senin aktarmana gerek yok.
 - \`coban agents\`'ta "manuel" yazan, boşta bekleyen agent'lar kullanıcının açtığı hazır oturumlardır: yeni işçi açmadan önce işi \`coban send <id> "<görev>"\` ile onlara ver (coban işçi talimatını otomatik ekler). Manuel agent'ları kapatma.
 - İşi biten işçiyi \`coban kill\` ile kapat. Alakasız yeni bir iş için eski işçiyi kullanma, yeni işçi aç.
@@ -43,6 +55,7 @@ const WORKER_PREAMBLE = (id: string, orch: string) => `[coban] Sen coban içinde
 - \`coban inbox\` → sana gelen mesajlar + ORTAK KUTUDAKİ yeni notlar. Her büyük adımdan sonra ve başkalarının da kullandığı bir dosyayı değiştirmeden önce MUTLAKA çalıştır; bir not işini etkiliyorsa ona göre davran.
 - \`coban post all "..."\` → ortak kutuya kısa not: başkalarını etkileyen her şeyi yaz (değiştirdiğin arayüz/şema/fonksiyon imzası, üzerinde çalıştığın dosyalar, önemli karar). Tek satır, net.
 - \`coban post <id> "..."\` → tek bir agent'a mesaj (liste: \`coban agents\`).
+Görevde "İLGİLİ KOD" bölümü varsa güncel kabul et: o kısımları yeniden okuma veya arama, sadece eksik kalan yer için oku. Repo yapısı için tek seferde \`coban map\` kullan.
 Bitince orkestratöre EN FAZLA 5 satırlık özet gönder: \`coban post ${orch} "..."\`. Ayrıntı (uzun rapor, liste, diff açıklaması) gerekiyorsa .coban/reports/${id}.md dosyasına yaz ve özette sadece yolunu ver. Belirsizlik olursa orkestratöre kısa bir soru gönder.
 
 GÖREV:
