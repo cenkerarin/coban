@@ -23,7 +23,13 @@ and those agents can **message each other**.
 
 ## How it works
 
-- `coban` opens a TUI with an agent **graph** on top and the focused agent's terminal below. Click the `+` bubble
+- `coban` opens a three-column TUI: a **conversation feed** on the left (agent-to-agent messages, board notes and
+  lifecycle events), the agent **graph** in the middle, and the focused agent's terminal — your **chat** — on the
+  right. Narrow terminals (< 140 cols) hide the feed; under 100 cols the graph stacks above the chat.
+- The graph is animated: messages travel along the edges as packets (board notes fan out to everyone), working
+  agents breathe, blocked ones blink, new ones fade in and recipients light up. Frames are only drawn while
+  something moves.
+- Earlier versions had the graph on top and the focused agent's terminal below. Click the `+` bubble
   (or press Enter) to pick the **orchestrator**'s profile; it starts with a system prompt that teaches it the
   `coban` CLI. Workers appear as bubbles wired to it — click one to switch the terminal to it.
 - Every agent runs in its own PTY; coban emulates its screen (xterm) and infers a status from it:
@@ -112,10 +118,10 @@ request spent *searching* is expensive while code handed over in the task is che
 
 ## Keys
 
-Mouse: click a bubble to focus it, click `+` to add an agent. Mouse events inside the terminal area are forwarded
+Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed with the wheel. Mouse events inside the terminal area are forwarded
 when the agent asks for them.
 
-`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `m` board panel ·
+`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `m` board panel · `l` toggle feed ·
 `s` select mode (releases the mouse so you can select/copy text) · `u` next unread ·
 `x` close agent · `q` quit · `ctrl+b` send a literal ctrl+b.
 
