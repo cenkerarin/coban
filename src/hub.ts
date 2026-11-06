@@ -129,7 +129,8 @@ export class Hub extends EventEmitter {
     const p = this.profile(o.profile);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
     const parts = [p.cmd];
-    const model = (o.role === 'orchestrator' && this.cfg.orchestratorModel) || p.model;
+    // orchestratorModel is a Claude model id: applying it to codex/opencode/cursor breaks them ("model not supported").
+    const model = (o.role === 'orchestrator' && p.cmd.startsWith('claude') && this.cfg.orchestratorModel) || p.model;
     if (model) parts.push(`--model ${q(model)}`);
     if (o.role === 'orchestrator' && p.cmd.startsWith('claude')) parts.push(`--append-system-prompt ${q(ORCH_PROMPT(id, this.cfg.profiles))}`);
     let task = o.task?.trim() ?? '';
