@@ -1,6 +1,6 @@
 {
   "name": "coban",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "description": "A terminal app where one orchestrator agent dispatches work to many AI coding agents — several Claude Code accounts, Codex, OpenCode, Cursor — that message each other over a shared board.",
   "scripts": {
     "postinstall": "node -e \"for(const a of ['darwin-arm64','darwin-x64','linux-x64','linux-arm64']){try{require('fs').chmodSync(require.resolve('node-pty/package.json').replace('package.json','prebuilds/'+a+'/spawn-helper'),0o755)}catch{}}\"",

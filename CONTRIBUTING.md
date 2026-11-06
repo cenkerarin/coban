@@ -1,7 +1,7 @@
 # Contributing
 
 Thanks for looking. coban is small on purpose: plain TypeScript run directly by Node (≥ 24), two runtime
-dependencies (`node-pty`, `@xterm/headless`), no build step.
+dependencies (`node-pty`, `@xterm/headless`), no build step in development (`npm run build` makes `dist/` for publishing).
 
 ```sh
 npm install
@@ -13,7 +13,7 @@ npm run typecheck
 
 | file | what it does |
 |---|---|
-| `bin/coban` | launcher (`node src/cli.ts`) |
+| `bin/coban` | launcher (`dist/cli.js` when built, else `src/cli.ts`) |
 | `src/cli.ts` | argument parsing; no args starts the TUI, anything else is a client call over the unix socket |
 | `src/hub.ts` | agents, messages, board, `wait`, automatic handoff, the socket RPC, and the prompts given to the orchestrator and workers |
 | `src/agent.ts` | one agent: a PTY plus a headless xterm, and the screen heuristics that set its status |
@@ -39,3 +39,10 @@ npm run typecheck
 - **Don't draw when idle.** The TUI only schedules frames while something moves; the e2e test checks that an idle
   screen writes nothing.
 - User-facing strings and agent prompts are in Turkish today. English (or i18n) PRs are welcome.
+
+## Releasing
+
+1. Bump `version` in `package.json`, commit, push to `main`.
+2. `git tag vX.Y.Z && git push --tag`, then `gh release create vX.Y.Z --generate-notes`.
+3. `npm publish --otp=<code>` (2FA is required; `prepublishOnly` runs typecheck, tests and build).
+4. Check with `npm view coban version`, and install the tarball in an empty directory before announcing.

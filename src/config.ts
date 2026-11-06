@@ -41,6 +41,31 @@ const claude = (n: number, model: string, color: string): Profile => ({
   color,
 });
 
+const onPath = (bin: string) =>
+  (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)));
+
+// First run on a fresh machine: only offer what is actually installed. A single `claude` login (~/.claude) becomes
+// h1; extra accounts (h2, h3) appear only when their own config dir (~/.claude-hesapN) already exists.
+export function detectConfig(): Config {
+  const profiles: Profile[] = [];
+  if (onPath('claude')) {
+    const h1 = claude(1, OPUS, '#F6D5C8');
+    if (!fs.existsSync(path.join(os.homedir(), '.claude-hesap1'))) delete h1.env;
+    profiles.push(h1);
+    for (const n of [2, 3]) {
+      if (fs.existsSync(path.join(os.homedir(), `.claude-hesap${n}`))) profiles.push(claude(n, SONNET, n === 2 ? '#FFD9A0' : '#C8E6C9'));
+    }
+  }
+  for (const p of DEFAULT_CONFIG.profiles) {
+    if (!p.id.match(/^h\d$/) && onPath(p.cmd.split(' ')[0])) profiles.push(p);
+  }
+  if (!profiles.length) return DEFAULT_CONFIG;   // nothing found: keep the full template to edit
+  const orchestrator = profiles[0].id;
+  const cfg: Config = { ...DEFAULT_CONFIG, orchestrator, profiles };
+  if (!/^h\d$/.test(orchestrator)) delete cfg.orchestratorModel;   // the Sonnet override is a Claude model id
+  return cfg;
+}
+
 export const DEFAULT_CONFIG: Config = {
   orchestrator: 'h1',
   // Coordination is mostly reading and routing, so the orchestrator runs on Sonnet;
@@ -61,7 +86,7 @@ const expand = (v: string) => v.replace(/^~(?=\/|$)/, os.homedir());
 export function loadConfig(): Config {
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2) + '\n');
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(detectConfig(), null, 2) + '\n');
   }
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
   for (const p of cfg.profiles) {

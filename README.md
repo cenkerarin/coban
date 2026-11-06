@@ -57,6 +57,26 @@ npm install -g coban
 cd ~/your-project && coban
 ```
 
+### First run
+
+On first start coban writes `~/.config/coban/config.json` and only offers what it finds: `claude`, `codex`,
+`opencode` and `cursor-agent` that are on your `PATH`. A plain `claude` login (`~/.claude`) becomes profile `h1`.
+More Claude accounts appear as `h2`/`h3` when `~/.claude-hesap2` / `~/.claude-hesap3` exist (log in with
+`CLAUDE_CONFIG_DIR=~/.claude-hesap2 claude`). Edit the file any time, see Config below.
+
+Note: the prompts coban gives the orchestrator and workers, and `coban --help`, are currently in Turkish.
+
+### Troubleshooting
+
+| symptom | fix |
+|---|---|
+| `SyntaxError` / `ERR_UNKNOWN_FILE_EXTENSION` on start | Node is too old, check `node -v` (needs ≥ 24) |
+| agent panel opens but asks to log in | log in once with that CLI (`claude`, `codex`...) outside coban, using the same `CLAUDE_CONFIG_DIR` as the profile |
+| a profile is missing | its CLI is not on `PATH` when coban first ran: install it and delete the config file, or add the profile by hand |
+| `coban çalışmıyor` from a `coban ...` command | open the TUI first with plain `coban`: those commands talk to the running app |
+| stale socket after a crash | `rm ~/.coban/coban.sock` |
+| Codex cannot talk to coban | its sandbox may block the unix socket, see Known gaps |
+
 ### From source (development)
 
 In a clone, TypeScript runs directly with no build step:
