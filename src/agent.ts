@@ -32,6 +32,7 @@ export class Agent extends EventEmitter {
   exitCode: number | null = null;
   inbox: Msg[] = [];
   model = '';
+  briefed = false;      // has received the coban worker brief
 
   constructor(o: { id: string; profile: Profile; role: Role; task: string; cwd: string; cmd: string; env: Record<string, string>; cols: number; rows: number }) {
     super();
@@ -78,7 +79,10 @@ export class Agent extends EventEmitter {
     let next: Status;
     if (LIMITED.test(tail) && !BUSY.test(tail)) next = 'limited';
     else if (BLOCKED.test(tail)) next = 'blocked';
-    else if (BUSY.test(tail) || Date.now() - this.lastOutput < QUIET_MS) next = this.status === 'starting' ? 'starting' : 'working';
+    // A visible "esc to interrupt" means real work, even right after launch (workers get their task as an argv
+    // prompt and never pass through idle). Bare output without it is still startup noise.
+    else if (BUSY.test(tail)) next = 'working';
+    else if (Date.now() - this.lastOutput < QUIET_MS) next = this.status === 'starting' ? 'starting' : 'working';
     else next = 'idle';
     this.setStatus(next);
   }

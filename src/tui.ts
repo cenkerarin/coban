@@ -102,6 +102,9 @@ export class Tui {
   pickRole: Role = 'manual';
   pickIdx = 0;
   notice = '';
+  showBoard = false;
+  selectMode = false;  // mouse released to the terminal so text can be selected/copied
+  boardBox?: { x: number; y: number; w: number; h: number };
   noticeTimer?: NodeJS.Timeout;
   outerAppCursor = false;
   outerMouse = '';
@@ -115,6 +118,7 @@ export class Tui {
     this.hub = hub;
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => this.schedule());
+    hub.on('board', () => this.schedule());
     hub.on('notify', (m: Msg) => this.flash(`✉ ${m.from}: ${flat(m.text)}`, 15000));
     setInterval(() => { this.spin++; if ([...hub.agents.values()].some((a) => a.status === 'working')) this.schedule(); }, 500).unref();
   }
@@ -185,6 +189,8 @@ export class Tui {
       case 'j': case '\x1b[B': case '\x1bOB': move(1); break;
       case 'k': case '\x1b[A': case '\x1bOA': move(-1); break;
       case 'o': if (hub.orchestratorId) hub.setFocus(hub.orchestratorId); else this.openPicker('orchestrator'); break;
+      case 'm': this.showBoard = !this.showBoard; this.prev = []; out.write('\x1b[2J'); break;
+      case 's': this.selectMode = !this.selectMode; break;
       case 'u': { const u = hub.order.find((id) => hub.agents.get(id)!.unread); if (u) hub.setFocus(u); break; }
       case 'x': {
         const a = hub.agents.get(hub.focus);
@@ -245,6 +251,7 @@ export class Tui {
       return;
     }
 
+    if (this.boardBox && inside(this.boardBox)) return; // panel swallows clicks
     const { G, paneTop, P } = this.geo;
     if (y <= G) {
       if (!click) return;
@@ -272,7 +279,35 @@ export class Tui {
   glyph(a: Agent) { return a.status === 'working' ? '◐◓◑◒'[this.spin % 4] : STATUS_STYLE[a.status][0]; }
   marks(a: Agent) {
     const mail = a.inbox.filter((m) => !m.delivered).length;
-    return (a.unread ? ' ✓' : '') + (mail ? ` ✉${mail}` : '');
+    const note = this.boardUnread(a);
+    return (a.unread ? ' ✓' : '') + (mail ? ` ✉${mail}` : '') + (note ? ` ▤${note}` : '');
+  }
+
+  boardUnread(a: Agent) { return this.hub.boardUnread(a.id); }
+
+  boardPanel(W: number, H: number, G: number): { c: Canvas; x: number; y: number } {
+    const notes = this.hub.board.slice(-10);
+    const w = clamp(W - 4, 20, 110);
+    const h = clamp(notes.length + 4, 5, Math.max(5, H - G - 3));
+    const x = W - w - 1 >= 0 ? W - w - 1 : 0, y = G + 1;
+    const c = new Canvas(w, h);
+    const bs = `0;1;${GOLD}`, bg = ';48;5;234';
+    c.put(0, 0, '╭' + '─'.repeat(w - 2) + '╮', bs);
+    c.put(2, 0, ` Ortak kutu (${this.hub.board.length}) `, bs);
+    for (let i = 1; i < h - 1; i++) { c.put(0, i, '│', bs); c.put(1, i, ' '.repeat(w - 2), `0${bg}`); c.put(w - 1, i, '│', bs); }
+    const room = h - 4;
+    const shown = notes.slice(-room);
+    if (!shown.length) c.segs(2, 1, w - 4, [['henüz not yok — coban post all "..."', DIM]], bg, false);
+    shown.forEach((m, i) => {
+      const t = new Date(m.ts);
+      const hhmm = `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`;
+      const col = hex(this.hub.agents.get(m.from)?.profile.color);
+      c.segs(2, 1 + i, w - 4, [[hhmm + ' ', DIM], [m.from, `1;${col}`], [' ' + flat(m.text), '39']], bg, false);
+    });
+    c.segs(2, h - 2, w - 4, [['^b m kapat', DIM]], bg, false);
+    c.put(0, h - 1, '╰' + '─'.repeat(w - 2) + '╯', bs);
+    this.boardBox = { x, y, w, h };
+    return { c, x, y };
   }
 
   workerLines(a: Agent, level: Level): Seg[][] {
@@ -494,13 +529,16 @@ export class Tui {
     const focus = hub.agents.get(hub.focus);
     const ov = this.mode === 'pick' ? this.picker(W, H) : undefined;
     if (!ov) this.pickBox = undefined;
+    const bp = this.showBoard && !ov ? this.boardPanel(W, H, G) : undefined;
+    if (!bp) this.boardBox = undefined;
 
     const base = (y: number, x0: number, x1: number) =>
       y <= G ? graph.row(y, x0, x1) : this.paneRow(focus, y - paneTop, P, W, x0, x1);
     const lines: string[] = [];
     for (let y = 0; y < H - 1; y++) {
-      if (ov && y >= ov.y && y < ov.y + ov.c.h) {
-        lines.push(base(y, 0, ov.x) + ov.c.row(y - ov.y) + base(y, ov.x + ov.c.w, W));
+      const o = ov ?? bp;
+      if (o && y >= o.y && y < o.y + o.c.h) {
+        lines.push(base(y, 0, o.x) + o.c.row(y - o.y) + base(y, o.x + o.c.w, W));
       } else lines.push(base(y, 0, W));
     }
     lines.push(this.statusBar(W));
@@ -513,7 +551,8 @@ export class Tui {
 
     // outer mouse mode: always clicks (1000) in SGR (1006); motion only if the focused agent wants it
     const want = focus?.term.modes.mouseTrackingMode;
-    const mouse = '\x1b[?1000h\x1b[?1006h' + (want === 'drag' ? '\x1b[?1002h' : want === 'any' ? '\x1b[?1003h' : '');
+    const mouse = this.selectMode ? '\x1b[?1000l\x1b[?1006l'
+      : '\x1b[?1000h\x1b[?1006h' + (want === 'drag' ? '\x1b[?1002h' : want === 'any' ? '\x1b[?1003h' : '');
     if (mouse !== this.outerMouse) { buf += '\x1b[?1002l\x1b[?1003l' + mouse; this.outerMouse = mouse; }
 
     if (focus) {
@@ -563,10 +602,13 @@ export class Tui {
   statusBar(w: number): string {
     const hub = this.hub;
     let left: string;
+    if (this.showBoard) hub.markBoardRead('user'); // the open panel counts as read
+    const unreadBoard = hub.boardUnread('user');
     if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
-    else if (this.prefix) left = ' ^b → n:yeni  1-9:seç  j/k:gez  o:orkestra  u:okunmamış  x:kapat  q:çık  ^b:ctrl-b gönder ';
-    else left = ` ^b komut · ${hub.focus || '-'} `;
-    const bg = this.prefix || this.mode !== 'normal' ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
+    else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
+    else if (this.prefix) left = ' ^b → n:yeni  1-9:seç  j/k:gez  o:orkestra  m:ortak kutu  s:seçim/kopyala  u:okunmamış  x:kapat  q:çık  ^b:ctrl-b gönder ';
+    else left = ` ^b komut · ${hub.focus || '-'}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
+    const bg = this.prefix || this.mode !== 'normal' || this.selectMode ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
     const right = this.notice ? ` ${this.notice} ` : '';
     const room = Math.max(0, w - right.length);
     if (room < 10) return `${bg}${fit(left, w)}\x1b[0m`;

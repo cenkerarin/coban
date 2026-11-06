@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import { Agent, keyBytes, type Msg, type Role, type Status } from './agent.ts';
-import { BIN_DIR, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
+import { BIN_DIR, DEFAULT_SOCK, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'exited'];
@@ -29,6 +29,7 @@ CONTEXT'İ KORU — her çağrının çıktısı bağlamına eklenir ve sonraki 
 - Beklerken uzun timeout kullan (\`coban wait --timeout 600\`), arka arkaya \`coban agents\` çağırma.
 - Görevleri kısa ve kendi içinde yeterli yaz: işçiye neyi, nerede, hangi kısıtla yapacağını söyle; dosyaları senin yerine o okusun.
 - İşçiler arası koordinasyonu ortak kutu üzerinden kur: paylaşılan kararları \`coban post all\` ile yaz, işçiler kutuyu kendileri kontrol eder. Her şeyi senin aktarmana gerek yok.
+- \`coban agents\`'ta "manuel" yazan, boşta bekleyen agent'lar kullanıcının açtığı hazır oturumlardır: yeni işçi açmadan önce işi \`coban send <id> "<görev>"\` ile onlara ver (coban işçi talimatını otomatik ekler). Manuel agent'ları kapatma.
 - İşi biten işçiyi \`coban kill\` ile kapat. Alakasız yeni bir iş için eski işçiyi kullanma, yeni işçi aç.
 
 Kurallar:
@@ -126,6 +127,7 @@ export class Hub extends EventEmitter {
     if (o.role === 'worker') ensureReportsDir(cwd);
     const a = new Agent({ id, profile: p, role: o.role, task: o.task ?? '', cwd, cmd: parts.join(' '), env, ...this.size });
     a.model = model ?? '';
+    a.briefed = !!task; // workers spawned with a task already got the brief
     a.on('render', () => this.emit('render', a));
     a.on('status', (s: Status) => {
       if (SETTLED.includes(s)) {
@@ -181,9 +183,15 @@ export class Hub extends EventEmitter {
       if (this.board.length > 500) this.board.shift();
       this.boardSeen.set(from, m.id);
       this.mirrorBoard(m);
+      this.emit('board', m);
     }
     else {
       const a = this.get(to);
+      // First coban message to an agent that never got the worker brief (opened by hand): brief it now.
+      if (!a.briefed && a.role !== 'orchestrator') {
+        m.text = WORKER_PREAMBLE(a.id, this.orchestratorId || from) + m.text;
+        a.briefed = true;
+      }
       a.inbox.push(m);
       if (a.status === 'idle') this.flushInbox(a);
     }
@@ -198,10 +206,27 @@ export class Hub extends EventEmitter {
     a.deliver(pending.map((m) => `[coban mesajı · ${m.from} → ${m.to}] ${m.text}`).join('\n\n'));
   }
 
+  // Unread shared-box notes for `id` (own posts excluded). Works for 'user' too.
+  boardUnread(id: string): number {
+    const since = this.boardSeen.get(id) ?? 0;
+    let n = 0;
+    for (const m of this.board) if (m.id > since && m.from !== id) n++;
+    return n;
+  }
+
+  markBoardRead(id: string) {
+    if (!this.board.length) return;
+    const last = this.board[this.board.length - 1].id;
+    if (this.boardSeen.get(id) === last) return;
+    this.boardSeen.set(id, last);
+    this.emit('change');
+  }
+
   takeBoard(id: string): Msg[] {
     const since = this.boardSeen.get(id) ?? 0;
     const fresh = this.board.filter((m) => m.id > since && m.from !== id);
     if (this.board.length) this.boardSeen.set(id, this.board[this.board.length - 1].id);
+    if (fresh.length) queueMicrotask(() => this.emit('change'));
     return fresh;
   }
 
@@ -210,7 +235,9 @@ export class Hub extends EventEmitter {
       fs.mkdirSync('.coban', { recursive: true });
       if (!fs.existsSync('.coban/.gitignore')) fs.writeFileSync('.coban/.gitignore', '*\n');
       const t = new Date(m.ts).toTimeString().slice(0, 8);
-      fs.appendFileSync('.coban/board.md', `- ${t} **${m.from}**: ${m.text.replace(/\s*\n\s*/g, ' ')}\n`);
+      // A second coban on its own socket (e.g. a test run) must not write into the real board.
+      const file = SOCK === DEFAULT_SOCK ? 'board.md' : `board-${SOCK.split('/').pop()!.replace(/\.sock$/, '')}.md`;
+      fs.appendFileSync(`.coban/${file}`, `- ${t} **${m.from}**: ${m.text.replace(/\s*\n\s*/g, ' ')}\n`);
     } catch {}
   }
 
@@ -260,6 +287,7 @@ export class Hub extends EventEmitter {
         ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
         task: a.task.replace(/\s+/g, ' ').slice(0, 60),
         unreadMessages: a.inbox.filter((m) => !m.delivered).length,
+        boardUnread: this.boardUnread(id),
       };
     });
   }
@@ -290,7 +318,11 @@ export class Hub extends EventEmitter {
         messages: this.takeInbox(caller).map(({ from, text, ts }) => ({ from, text, ts })),
         board: this.takeBoard(caller).map(({ from, text, ts }) => ({ from, text, ts })),
       };
-      case 'board': return { board: this.board.slice(-(p.limit ?? 20)).map(({ from, text, ts }) => ({ from, text, ts })) };
+      case 'board': {
+        const r = { board: this.board.slice(-(p.limit ?? 20)).map(({ from, text, ts }) => ({ from, text, ts })) };
+        this.markBoardRead(caller);
+        return r;
+      }
       case 'kill': this.kill(p.id); return { ok: true };
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);

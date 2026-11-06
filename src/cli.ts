@@ -82,8 +82,8 @@ async function main() {
   const short = (m?: string) => (m ? m.replace(/^claude-/, '') : '');
   const one = (s: string) => s.replace(/\s+/g, ' ').trim();
   const agentLine = (a: any) =>
-    [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : '', a.status,
-      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
+    [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : a.role === 'manual' ? 'manuel' : '', a.status,
+      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
       .filter(Boolean).join('  ');
 
   switch (cmd) {

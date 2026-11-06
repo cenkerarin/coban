@@ -82,7 +82,12 @@ orchestrator — coordination is mostly reading and routing, so a cheaper model 
 Agents share decisions on a **board**: `coban post all "<note>"` (interface/schema changes, which files they are
 on, key decisions). Board notes are *pulled*, not pushed — `coban inbox` returns each note once, and workers are told
 to check it after every major step and before touching shared files. This keeps idle agents from being woken (and
-billed) for every note. The board is mirrored to `.coban/board.md` so you can follow along.
+billed) for every note. The board is mirrored to `.coban/board.md` so you can follow along (a coban started on a non-default
+`COBAN_SOCK` writes `board-<sock>.md` instead), and `ctrl+b m` opens it as a panel; an unread badge `▤N` shows on
+bubbles and in the status bar.
+
+Agents you open by hand show up as `manuel` in `coban agents`; the orchestrator is told to hand work to idle manual
+agents before spawning new ones, and coban prepends the worker brief to the first message they receive.
 
 ## Keeping context small
 
@@ -96,14 +101,16 @@ one-line outputs (`--json` for raw), `coban read` defaults to 20 lines with Clau
 Mouse: click a bubble to focus it, click `+` to add an agent. Mouse events inside the terminal area are forwarded
 when the agent asks for them.
 
-`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `u` next unread ·
+`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `m` board panel ·
+`s` select mode (releases the mouse so you can select/copy text) · `u` next unread ·
 `x` close agent · `q` quit · `ctrl+b` send a literal ctrl+b.
 
 ## Known gaps
 
 No scrollback, no split view, no kitty keyboard protocol (shift+enter), no session restore. Codex's sandbox
-may block the unix socket. Status detection is screen heuristics and may need tuning per CLI version. Because coban
-captures the mouse, use your terminal's selection modifier (e.g. ⌥/Option-drag) to select text.
+may block the unix socket. Status detection is screen heuristics and may need tuning per CLI version. coban captures
+the mouse; to copy text press `ctrl+b s` (select mode) or use your terminal's override (shift-drag in Ghostty/cmux,
+⌥-drag in iTerm2).
 
 ## License
 
