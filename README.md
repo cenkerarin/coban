@@ -61,8 +61,9 @@ cd ~/your-project && coban
 
 On first start coban writes `~/.config/coban/config.json` and only offers what it finds: `claude`, `codex`,
 `opencode` and `cursor-agent` that are on your `PATH`. A plain `claude` login (`~/.claude`) becomes profile `h1`.
-More Claude accounts appear as `h2`/`h3` when `~/.claude-hesap2` / `~/.claude-hesap3` exist (log in with
-`CLAUDE_CONFIG_DIR=~/.claude-hesap2 claude`). Edit the file any time, see Config below.
+Add more Claude accounts with `coban account add` (run it while the app is closed): it opens `claude` for the next
+free profile (`h2`, `h3`...) in its own `~/.claude-hesapN` dir, you log in in the browser and type `/exit`, and the
+profile is written to the config. Restart coban to see it. Edit the file any time, see Config below.
 
 Note: the prompts coban gives the orchestrator and workers, and `coban --help`, are currently in Turkish.
 

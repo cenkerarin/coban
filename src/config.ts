@@ -41,6 +41,22 @@ const claude = (n: number, model: string, color: string): Profile => ({
   color,
 });
 
+const COLORS = ['#F6D5C8', '#FFD9A0', '#C8E6C9', '#FFC8DD', '#BDE0FE', '#E2CFEA'];
+
+// `coban account add`: the next free hN, its config dir, and a profile ready to append to the config file.
+export function nextAccount(cfg: Config): { profile: Profile; dir: string } {
+  const used = new Set(cfg.profiles.map((p) => p.id));
+  let n = 1;
+  while (used.has(`h${n}`)) n++;
+  return { profile: claude(n, SONNET, COLORS[(n - 1) % COLORS.length]), dir: path.join(os.homedir(), `.claude-hesap${n}`) };
+}
+
+export function appendProfile(p: Profile) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
+  raw.profiles.push(p);
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+}
+
 const onPath = (bin: string) =>
   (process.env.PATH ?? '').split(path.delimiter).some((d) => d && fs.existsSync(path.join(d, bin)));
 

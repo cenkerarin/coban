@@ -1,5 +1,7 @@
 import net from 'node:net';
-import { loadConfig, SOCK } from './config.ts';
+import fs from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, SOCK } from './config.ts';
 import { repoMap, snippets } from './context.ts';
 import { allUsage, type AccountUsage } from './usage.ts';
 
@@ -25,6 +27,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban board [--limit n]             ortak kutunun son notları
   coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
   coban log [--limit n]
+  coban account add                   yeni Claude hesabı ekle: giriş yaptırır, profili config'e yazar (arayüz kapalıyken)
 
 Her komut --json ile ham çıktı verir.`;
 
@@ -68,6 +71,20 @@ async function main() {
   const [cmd, ...rest] = process.argv.slice(2);
   const { pos, flags, ctx } = parse(rest);
   const num = (v: unknown) => (v === undefined || v === true ? undefined : Number(v));
+
+  if (cmd === 'account') {
+    if (pos[0] !== 'add') { console.log('kullanım: coban account add'); process.exit(1); }
+    const cfg = loadConfig();
+    const { profile, dir } = nextAccount(cfg);
+    fs.mkdirSync(dir, { recursive: true });
+    console.log(`Yeni hesap: ${profile.id} (${dir})\nClaude açılıyor: tarayıcıdan giriş yap, sonra /exit yaz.\n`);
+    const r = spawnSync('claude', [], { stdio: 'inherit', env: { ...process.env, CLAUDE_CONFIG_DIR: dir } });
+    if (r.error) { console.error('claude bulunamadı: önce Claude Code kur (https://claude.com/claude-code)'); process.exit(1); }
+    if (!fs.readdirSync(dir).length) { console.error('Giriş yapılmamış görünüyor, profil eklenmedi. Tekrar dene: coban account add'); process.exit(1); }
+    appendProfile(profile);
+    console.log(`\n${profile.id} eklendi (${CONFIG_PATH}). Arayüzü yeniden aç: coban`);
+    return;
+  }
 
   if (!cmd || cmd === '--cwd') {
     if (cmd === '--cwd') process.chdir(rest[0]);
