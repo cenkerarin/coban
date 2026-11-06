@@ -4,6 +4,7 @@ import { EventEmitter } from 'node:events';
 import { Agent, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
 import { BIN_DIR, DEFAULT_SOCK, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
 import { allUsage, isClaude, type AccountUsage } from './usage.ts';
+import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'exited'];
@@ -18,6 +19,8 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban send <id> "<mesaj>" [--ctx yer]...   meşgulse boşalınca iletilir
   coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
   coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
+  coban approvals                      izin bekleyen agent'lar: soru, komut/dosya, seçenekler
+  coban approve <id> [yes|always|no]   izni yanıtlar (varsayılan yes; always = "Yes, and …" seçeneği)
   coban key <id> <tuş...>              enter, esc, up, down, tab, 1, 2, y ...
   coban post all "<not>"               ORTAK KUTU: herkesin göreceği kısa not (karar, arayüz/şema değişikliği, kim hangi dosyada)
   coban inbox                          sana gelen mesajlar + ortak kutudaki yeni notlar (yalnızca okumadıkların)
@@ -49,7 +52,7 @@ GÖREV NASIL YAZILIR — işçinin her isteği ~45k'lık sabit bağlamı yeniden
 Kurallar:
 - Aynı dosyalara yazacak iki işçi açma; gerekiyorsa ayrı git worktree kullandır.
 - Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan: iş vermeden önce \`coban usage\` bak ve işi (uygun modeldeki) EN AZ HARCAMIŞ hesaba ver. "limited" olan işçiyi coban otomatik olarak en az harcamış uygun hesaba devreder (<eski>-devir); sen sadece gelen devir bildirimini doğrula, uygun hesap yoksa kullanıcıya bildir.
-- "blocked" işçinin izin sorusunu güvenli ve görev kapsamındaysa \`coban key\` ile onayla, emin değilsen kullanıcıya sor.
+- "blocked" işçinin sorusunu \`coban approvals\` ile gör; güvenli ve görev kapsamındaysa \`coban approve <id>\` ile onayla, kapsam dışıysa \`coban approve <id> no\`, emin değilsen kullanıcıya sor (kullanıcı da coban'ın izin kutusundan onaylayabilir).
 - Bitince sonucu doğrula ve kullanıcıya kısa özet ver.`;
 
 const WORKER_PREAMBLE = (id: string, orch: string) => `[coban] Sen coban içinde çalışan bir işçi agent'sın. Kimliğin: ${id}. Orkestratör: ${orch}.
@@ -372,6 +375,28 @@ export class Hub extends EventEmitter {
     return b.id;
   }
 
+  // ── approval inbox: permission questions read off blocked agents' screens ──
+  approvals(): { id: string; profile: string; title: string; prompt: Prompt | null }[] {
+    return this.order.map((id) => this.agents.get(id)!).filter((a) => a.status === 'blocked').map((a) => {
+      const prompt = parsePrompt(a.screenText(40));
+      return { id: a.id, profile: a.profile.id, title: a.profile.title, prompt };
+    });
+  }
+
+  // Answer an agent's current question. `key` (from approvals()) guards against answering a question that changed.
+  async answer(id: string, choice: Choice, key?: string): Promise<string> {
+    const a = this.get(id);
+    const p = parsePrompt(a.screenText(40));
+    if (a.status !== 'blocked' || !p) throw new Error(`${id} şu an bir soru beklemiyor`);
+    if (key && p.key !== key) throw new Error(`${id}: soru değişti, tekrar bak`);
+    const keys = answerKeys(p, choice, a.term.modes.applicationCursorKeysMode);
+    if (!keys) throw new Error(`${id}: bu soruda "${choice}" seçeneği yok`);
+    for (const k of keys) { a.proc.write(k); await new Promise((r) => setTimeout(r, 80)); }
+    a.lastOutput = Date.now();
+    this.emit('change');
+    return p.kind === 'yn' ? (choice === 'no' ? 'n' : 'y') : p.options[pickOption(p, choice)].label;
+  }
+
   // Per-account usage, least spent first (for `coban usage` and the TUI).
   usage(): AccountUsage[] { return allUsage(this.cfg, this.limitedAt); }
 
@@ -420,6 +445,8 @@ export class Hub extends EventEmitter {
         return r;
       }
       case 'usage': return { usage: this.usage() };
+      case 'approvals': return { approvals: this.approvals() };
+      case 'approve': return { picked: await this.answer(p.id, (p.choice ?? 'yes') as Choice, p.key) };
       case 'kill': this.kill(p.id); return { ok: true };
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);

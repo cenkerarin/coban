@@ -18,6 +18,7 @@ npm run typecheck
 | `src/hub.ts` | agents, messages, board, `wait`, automatic handoff, the socket RPC, and the prompts given to the orchestrator and workers |
 | `src/agent.ts` | one agent: a PTY plus a headless xterm, and the screen heuristics that set its status |
 | `src/tui.ts` | layout (feed · graph · chat), the cell canvas, animations, input and mouse |
+| `src/prompt.ts` | permission questions read off a screen, and the arrow-key answers for them |
 | `src/context.ts` | `coban map` and `--ctx` snippet extraction |
 | `src/usage.ts` | per-account token usage from Claude Code session logs |
 | `src/config.ts` | profiles and paths (`~/.config/coban/config.json`, `~/.coban/coban.sock`) |
@@ -31,6 +32,8 @@ npm run typecheck
 - **Test against fake agents.** `startCoban()` in `test/helpers.ts` gives you a running TUI, its screen, and a CLI
   that can act as any agent (`cli('w1', 'post', 'all', '…')`). Real CLIs (Claude Code, Codex, …) are never needed in
   tests.
+- **Permission prompts:** add a real captured screen to `test/fixtures/prompts/` (strip personal paths) with a test
+  in `test/prompt.test.ts` before changing `src/prompt.ts`.
 - **Screen heuristics are fragile.** If you add patterns to `BLOCKED`/`LIMITED`/`BUSY` in `src/agent.ts`, include the
   exact text the CLI prints and its version in the PR.
 - **Don't draw when idle.** The TUI only schedules frames while something moves; the e2e test checks that an idle

@@ -24,7 +24,7 @@ export async function until(f: () => boolean | Promise<boolean>, ms = 8000, step
   }
 }
 
-export type Profile = { id: string; title: string; cmd: string; promptArg?: string; color?: string };
+export type Profile = { id: string; title: string; cmd: string; promptArg?: string; color?: string; env?: Record<string, string> };
 export const fakeProfile = (id = 'fake', title = 'Fake', color = '#8FDBFF'): Profile =>
   ({ id, title, cmd: `${process.execPath} ${FAKE}`, promptArg: '{prompt}', color });
 

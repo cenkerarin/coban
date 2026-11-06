@@ -41,6 +41,8 @@ coban inbox                                    your direct messages + board note
 coban board [--limit n]                        recent board notes
 coban wait [id...] [--timeout s]               returns when an agent settles or mail arrives
 coban read <id> [--lines n] [--raw]            an agent's screen, UI chrome stripped
+coban approvals                                agents waiting on a permission question, parsed
+coban approve <id> [yes|always|no]             answer it (always = the "Yes, and …" option)
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
 coban usage                                    per-account usage, least spent first
 coban kill <id> · coban log                    every command takes --json
@@ -90,6 +92,23 @@ When a worker hits a usage limit, coban **hands its task off** to the least-spen
 worker gets the original task plus the old worker's last screen, undelivered mail follows it, and the board and the
 orchestrator are told.
 
+## Approvals and the input line
+
+- **One approval inbox.** When agents stop at a permission question, coban reads it off their screen — title,
+  command or file, and the exact options — and lists them in a panel under the graph. `ctrl+b y` approves the
+  selected one, `ctrl+b a` picks its "Yes, and …" option (shown verbatim, so you see what it grants), `ctrl+b r`
+  rejects, `ctrl+b i` moves to the next; or click the buttons. The orchestrator can do the same with
+  `coban approvals` / `coban approve`. Answers are given by moving the menu selection with arrow keys and pressing
+  Enter (never by digit: Claude Code's folder-trust menu has no numbers and defaults to "No, exit"), and an answer
+  is refused if the question changed since it was shown.
+- **coban's own input line** sits under the chat: `ctrl+b c` (or a click) focuses it. `@h2 also add a refresh
+  endpoint` goes to h2 without switching focus, `@all …` to the board, plain text to the focused agent; Tab
+  completes agent names, Esc returns the keyboard to the agent.
+
+The parser is built against real Claude Code screens (`test/fixtures/prompts`). Driving agents through the Agent SDK
+would give exact events instead of screen reading, but its docs ask third-party tools not to offer claude.ai login,
+so coban keeps running the unmodified Claude Code with your own login.
+
 ## Agents talking
 
 - **Direct messages** (`coban post <id>`) are typed into the recipient's terminal once it is idle.
@@ -118,7 +137,7 @@ keeps what lands there lean:
 Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed with the wheel. Mouse events in the
 chat are forwarded when the agent asks for them.
 
-`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
+`ctrl+b` then: `c` input line · `y`/`a`/`r` approve / always / reject · `i` next approval · `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
 `l` toggle feed · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
 `ctrl+b` send a literal ctrl+b.
 

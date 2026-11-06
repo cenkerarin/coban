@@ -1,6 +1,7 @@
 import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
 import type { AccountUsage } from './usage.ts';
+import { pickOption, type Choice, type Prompt } from './prompt.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -139,8 +140,11 @@ type Layout = {
   gx: number; gw: number;        // graph column
   px: number; pw: number;        // chat (focused agent terminal) column
   paneTop: number; P: number;    // first terminal row and number of terminal rows
+  cy: number;                    // composer: separator row (input row is cy + 1), spans [px, px + pw)
   p: Plan;
 };
+type Approval = { id: string; profile: string; title: string; prompt: Prompt | null };
+type Rect = { x: number; y: number; w: number; h: number };
 
 export class Tui {
   hub: Hub;
@@ -155,6 +159,13 @@ export class Tui {
   showBoard = false;
   feedHidden = false;
   selectMode = false;  // mouse released to the terminal so text can be selected/copied
+  composing = false;   // keystrokes go to coban's own input line instead of the focused agent
+  draft = '';
+  pending: Approval[] = [];
+  approvalSel = 0;
+  showApprovals = false; // stacked layout only: the panel is opened on demand
+  approvalsBox?: Rect;
+  approvalHits: { x0: number; x1: number; y: number; id: string; choice?: Choice }[] = [];
   feedScroll = 0;      // lines scrolled up from the newest feed entry
   boardBox?: { x: number; y: number; w: number; h: number };
   noticeTimer?: NodeJS.Timeout;
@@ -253,11 +264,12 @@ export class Tui {
     for (const m of hub.log) {
       if (m.id <= this.lastLogId) continue;
       this.lastLogId = m.id;
-      const from = hub.agents.has(m.from) ? m.from : hub.orchestratorId;
+      const from = hub.agents.has(m.from) ? m.from : m.from === 'user' ? '' : hub.orchestratorId;
       const color = rgbOf(hub.agents.get(m.from)?.profile.color) ?? GOLD_RGB;
       const targets = m.to === 'all' ? hub.order.filter((id) => id !== m.from) : hub.agents.has(m.to) ? [m.to] : [];
       targets.forEach((to, i) => { if (from && to !== from) this.packets.push({ from, to, color, t0: now + i * 70, dur: 0 }); });
       if (!targets.length && from) this.arrivedAt.set(from, now);
+      if (!from) for (const to of targets) this.arrivedAt.set(to, now);
     }
   }
 
@@ -297,6 +309,7 @@ export class Tui {
     }
     if (d === PREFIX) { this.prefix = true; return this.schedule(); }
     if (d[0] === PREFIX) { this.prefix = true; return this.input(d.slice(1)); } // ^b and the key in one read
+    if (this.composing) return this.composeKey(d);
 
     const a = hub.agents.get(hub.focus);
     if (!a) {
@@ -320,6 +333,15 @@ export class Tui {
       case 'm': this.showBoard = !this.showBoard; this.prev = []; out.write('\x1b[2J'); break;
       case 'l': this.feedHidden = !this.feedHidden; this.prev = []; out.write('\x1b[2J'); break;
       case 's': this.selectMode = !this.selectMode; break;
+      case 'c': this.composing = !this.composing; break;
+      case 'y': this.answerSelected('yes'); break;
+      case 'a': this.answerSelected('always'); break;
+      case 'r': this.answerSelected('no'); break;
+      case 'i':
+        if (this.geo?.mode === 'stack' && !this.showApprovals) this.showApprovals = true;
+        else if (this.pending.length > 1) this.approvalSel = (this.approvalSel + 1) % this.pending.length;
+        else if (this.geo?.mode === 'stack') this.showApprovals = false;
+        break;
       case 'u': { const u = hub.order.find((id) => hub.agents.get(id)!.unread); if (u) hub.setFocus(u); break; }
       case 'x': {
         const a = hub.agents.get(hub.focus);
@@ -333,6 +355,50 @@ export class Tui {
       default:
         if (/^[1-9]$/.test(c) && hub.order[Number(c) - 1]) hub.setFocus(hub.order[Number(c) - 1]);
     }
+    this.schedule();
+  }
+
+  // ── coban's own input line: "@id text" goes to that agent, "@all text" to the board, plain text to the focus ──
+  composeKey(d: string) {
+    const paste = d.match(/^\x1b\[200~([\s\S]*)\x1b\[201~$/);
+    if (paste) { this.draft += paste[1].replace(/\r\n?/g, '\n'); return this.schedule(); }
+    if (d === '\x1b') this.composing = false;
+    else if (d === '\r') this.send();
+    else if (d === '\x7f' || d === '\b') this.draft = [...this.draft].slice(0, -1).join('');
+    else if (d === '\x15') this.draft = '';
+    else if (d === '\t') {
+      const m = this.draft.match(/@(\S*)$/);
+      if (m) {
+        const hit = ['all', ...this.hub.order].find((id) => id.startsWith(m[1]) && id !== m[1]);
+        if (hit) this.draft = this.draft.slice(0, this.draft.length - m[1].length) + hit + ' ';
+      }
+    } else if (!d.startsWith('\x1b')) this.draft += d.replace(/[\x00-\x08\x0b-\x1f\x7f]/g, '');
+    this.schedule();
+  }
+
+  target(): { to: string; text: string } {
+    const m = this.draft.match(/^\s*@(\S+)\s*([\s\S]*)$/);
+    if (!m) return { to: this.hub.focus, text: this.draft.trim() };
+    const id = m[1].toLowerCase();
+    return { to: id === 'herkes' ? 'all' : m[1], text: m[2].trim() };
+  }
+
+  send() {
+    const { to, text } = this.target();
+    if (!text) return;
+    if (to !== 'all' && !this.hub.agents.has(to)) return this.flash(`agent yok: @${to}`);
+    try { this.hub.post('user', to, text); this.draft = ''; }
+    catch (e: any) { this.flash(e.message); }
+  }
+
+  async answerSelected(choice: Choice, id = this.pending[this.approvalSel]?.id) {
+    const ap = this.pending.find((x) => x.id === id);
+    if (!ap) return this.flash('izin bekleyen yok');
+    if (!ap.prompt) { this.hub.setFocus(ap.id); return this.flash(`${ap.id}: soru okunamadı, terminalde yanıtla`); }
+    try {
+      const picked = await this.hub.answer(ap.id, choice, ap.prompt.key);
+      this.event(ap.id, choice === 'no' ? '✗' : '✓', choice === 'no' ? STATUS_STYLE.blocked[1] : MARK, `izin: ${picked}`, ap.prompt.body[0] ?? ap.prompt.title);
+    } catch (e: any) { this.flash(e.message); }
     this.schedule();
   }
 
@@ -380,6 +446,13 @@ export class Tui {
       return;
     }
     if (this.boardBox && inside(this.boardBox)) return; // panel swallows clicks
+    if (this.approvalsBox && inside(this.approvalsBox)) {
+      if (!click) return;
+      const h = this.approvalHits.find((r) => r.y === y && x >= r.x0 && x < r.x1);
+      if (h?.choice) void this.answerSelected(h.choice, h.id);
+      else if (h) { this.approvalSel = Math.max(0, this.pending.findIndex((p) => p.id === h.id)); this.hub.setFocus(h.id); }
+      return;
+    }
 
     const L = this.geo;
     if (!L) return;
@@ -398,6 +471,9 @@ export class Tui {
       else this.openPicker(h.kind === 'add-orch' ? 'orchestrator' : 'manual');
       return;
     }
+    // composer: a click focuses it; a click in the chat gives the keyboard back to the agent
+    if ((y === L.cy || y === L.cy + 1) && x >= L.px && x < L.px + L.pw) { if (click) { this.composing = true; this.schedule(); } return; }
+    if (click && this.composing) { this.composing = false; this.schedule(); }
     // chat pane: forward when the agent asked for mouse reports, otherwise swallow
     const a = this.hub.agents.get(this.hub.focus);
     const row = y - L.paneTop, col = x - L.px;
@@ -416,7 +492,8 @@ export class Tui {
     const Hb = Math.max(4, H - 1); // body rows above the status bar
     if (W < 100) {
       const p = this.plan(W, H, false);
-      return { mode: 'stack', fx: 0, fw: 0, gx: 0, gw: W, px: 0, pw: W, paneTop: p.G + 1, P: Math.max(1, H - p.G - 2), p };
+      const P = Math.max(1, H - p.G - 4);
+      return { mode: 'stack', fx: 0, fw: 0, gx: 0, gw: W, px: 0, pw: W, paneTop: p.G + 1, P, cy: p.G + 1 + P, p };
     }
     let fw = this.feedHidden || W < 140 ? 0 : clamp(Math.round(W * 0.24), 30, 56);
     let pw = clamp(Math.round(W * 0.42), 64, 130);
@@ -424,7 +501,7 @@ export class Tui {
     if (gw < 40) { const t = Math.min(40 - gw, pw - 60); pw -= t; gw += t; }
     if (gw < 40 && fw) { const t = Math.min(40 - gw, fw - 26); fw -= t; gw += t; }
     const gx = fw ? fw + 1 : 0;
-    return { mode: 'cols', fx: 0, fw, gx, gw, px: gx + gw + 1, pw, paneTop: 1, P: Hb - 1, p: this.plan(gw, Hb, true) };
+    return { mode: 'cols', fx: 0, fw, gx, gw, px: gx + gw + 1, pw, paneTop: 1, P: Hb - 3, cy: Hb - 2, p: this.plan(gw, Hb, true) };
   }
 
   glyph(a: Agent) {
@@ -785,6 +862,71 @@ export class Tui {
     return c;
   }
 
+  // ── approval inbox ───────────────────────────────────────
+  approvalsPanel(L: Layout, H: number): { c: Canvas; x: number; y: number } | undefined {
+    this.approvalHits = [];
+    if (!this.pending.length || (L.mode === 'stack' && !this.showApprovals)) return undefined;
+    this.approvalSel = Math.min(this.approvalSel, this.pending.length - 1);
+    const x = L.gx + 1, w = Math.max(24, L.gw - 2);
+    const maxItems = Math.max(1, Math.floor((H - 5) / 3));
+    const shown = this.pending.slice(0, maxItems);
+    const h = 3 + shown.length * 3 + (this.pending.length > shown.length ? 1 : 0);
+    const y = L.mode === 'cols' ? Math.max(0, H - 1 - h) : L.paneTop;
+    const c = new Canvas(w, h);
+    const blink = Math.floor(this.now / 600) % 2 === 0;
+    const bs = `0;1;${blink ? '38;5;203' : '38;5;167'}`, bg = ';48;5;234';
+    c.put(0, 0, '╭' + '─'.repeat(w - 2) + '╮', bs);
+    c.put(2, 0, ` ! İZİN BEKLEYENLER (${this.pending.length}) `, bs);
+    for (let i = 1; i < h - 1; i++) { c.put(0, i, '│', bs); c.put(1, i, ' '.repeat(w - 2), `0${bg}`); c.put(w - 1, i, '│', bs); }
+    shown.forEach((ap, i) => {
+      const r = 1 + i * 3, sel = i === this.approvalSel, rbg = sel ? ';48;5;237' : bg;
+      const a = this.hub.agents.get(ap.id);
+      const p = ap.prompt;
+      for (let k = 0; k < 3; k++) c.put(1, r + k, ' '.repeat(w - 2), `0${rbg}`);
+      c.segs(2, r, w - 4, [[sel ? '▸ ' : '  ', `1;${GOLD}`], [ap.id, `1;${hex(a?.profile.color)}`], [` · ${ap.title} · `, DIM], [p?.title ?? 'izin', '1;39']], rbg, false);
+      c.segs(4, r + 1, w - 6, [[p ? (p.body.length ? p.body.join(' · ') : p.question) : 'soru okunamadı — tıkla, terminalde yanıtla', p ? '38;5;223' : DIM]], rbg, false);
+      this.approvalHits.push({ x0: x + 1, x1: x + w - 1, y: y + r, id: ap.id }, { x0: x + 1, x1: x + w - 1, y: y + r + 1, id: ap.id });
+      if (!p) return;
+      // buttons: the exact option text, so "always" never hides what it grants
+      let bx = 4;
+      const pick = (choice: Choice, key: string, color: string) => {
+        const idx = p.kind === 'yn' ? (choice === 'always' ? -1 : 0) : pickOption(p, choice); // same rule as the keys sent
+        if (idx < 0) return;
+        const label = p.kind === 'yn' ? (choice === 'no' ? 'hayır' : 'evet') : p.options[idx].label;
+        const room = w - 2 - bx; if (room < 8) return;
+        const text = fit(`[${key}] ${label}`, Math.min(room, choice === 'always' ? 60 : 16)).trimEnd();
+        c.segs(bx, r + 2, text.length, [[text, color]], rbg, false);
+        this.approvalHits.push({ x0: x + bx, x1: x + bx + text.length, y: y + r + 2, id: ap.id, choice });
+        bx += text.length + 2;
+      };
+      pick('yes', 'y', `1;${MARK}`); pick('no', 'r', '1;38;5;203'); pick('always', 'a', '38;5;179'); // the long label goes last
+    });
+    if (this.pending.length > shown.length) c.segs(2, h - 2, w - 4, [[`+${this.pending.length - shown.length} daha · ^b i ile sırayla`, DIM]], bg, false);
+    c.put(0, h - 1, '╰' + '─'.repeat(w - 2) + '╯', bs);
+    c.put(2, h - 1, ' ^b y onayla · a hep · r reddet · i sıradaki ', `0;${DIM}`);
+    this.approvalsBox = { x, y, w, h };
+    return { c, x, y };
+  }
+
+  composer(w: number): Canvas {
+    const c = new Canvas(w, 2);
+    const { to } = this.target();
+    const known = to === 'all' || this.hub.agents.has(to);
+    const toSeg: Seg = to === 'all' ? ['ortak kutu', `1;${GOLD}`] : [to || '—', known ? `1;${hex(this.hub.agents.get(to)?.profile.color)}` : '1;38;5;203'];
+    c.put(0, 0, '─'.repeat(w), SEP);
+    c.segs(1, 0, w - 2, [[' sen → ', DIM], toSeg, [this.composing ? '  · enter gönder · esc çık · tab @tamamla ' : ' ', DIM]], '', false);
+    const bg = this.composing ? ';48;5;236' : '';
+    const flatDraft = this.draft.replace(/\n/g, ' ⏎ ');
+    if (!this.draft && !this.composing) c.segs(0, 1, w, [[' › ', DIM], ['@agent ile birine, @all ile herkese yaz… (^b c ya da tıkla)', `3;${DIM}`]], bg, false);
+    else {
+      const room = w - 4;
+      const vis = flatDraft.length > room ? '…' + flatDraft.slice(-(room - 1)) : flatDraft;
+      const m = vis.match(/^(@\S+)([\s\S]*)$/);
+      c.segs(0, 1, w, [[' › ', `1;${GOLD}`], ...(m ? [[m[1], toSeg[1]], [m[2], '39']] as Seg[] : [[vis, '39']] as Seg[])], bg, false);
+    }
+    return c;
+  }
+
   paneTitle(f: Agent): Seg[] {
     return [[this.glyph(f), STATUS_STYLE[f.status][1]], [' ' + f.id, '1'], [' · ', DIM], [f.profile.title, hex(f.profile.color)],
       [f.model ? ' · ' + f.model.replace(/^claude-/, '') : '', DIM], [' · ' + STATUS_STYLE[f.status][2], DIM]];
@@ -820,14 +962,21 @@ export class Tui {
     if (!ov) this.pickBox = undefined;
     const bp = this.showBoard && !ov ? this.boardPanel(W, H, full ? 0 : L.p.G) : undefined;
     if (!bp) this.boardBox = undefined;
+    this.pending = hub.approvals();
+    if (!this.pending.length) this.showApprovals = false;
+    const ap = !ov ? this.approvalsPanel(L, H) : undefined;
+    if (!ap) this.approvalsBox = undefined;
+    const comp = this.composer(L.pw);
+    const chatRow = (y: number, a: number, b: number) =>
+      y === L.cy || y === L.cy + 1 ? comp.row(y - L.cy, a, b) : this.paneRow(focus, y - L.paneTop, L.P, L.pw, a, b);
 
     // one screen row, clipped to [x0, x1): each column renders only its own slice
     const base = (y: number, x0: number, x1: number): string => {
-      if (!full) return y <= L.p.G ? graph.row(y, x0, x1) : this.paneRow(focus, y - L.paneTop, L.P, W, x0, x1);
+      if (!full) return y <= L.p.G ? graph.row(y, x0, x1) : chatRow(y, x0, x1);
       const cols: [number, number, (a: number, b: number) => string][] = [];
       if (feed) cols.push([L.fx, L.fw, (a, b) => feed.row(y, a, b)], [L.fx + L.fw, 1, () => `\x1b[${SEP}m│\x1b[0m`]);
       cols.push([L.gx, L.gw, (a, b) => graph.row(y, a, b)], [L.gx + L.gw, 1, () => `\x1b[${SEP}m│\x1b[0m`]);
-      cols.push([L.px, L.pw, (a, b) => (y === 0 ? head!.row(0, a, b) : this.paneRow(focus, y - L.paneTop, L.P, L.pw, a, b))]);
+      cols.push([L.px, L.pw, (a, b) => (y === 0 ? head!.row(0, a, b) : chatRow(y, a, b))]);
       let s = '';
       for (const [cx, cw, fn] of cols) {
         const a = Math.max(x0, cx), b = Math.min(x1, cx + cw);
@@ -836,11 +985,17 @@ export class Tui {
       return s;
     };
     const lines: string[] = [];
+    const overlays = [ov, bp, ap].filter((o): o is { c: Canvas; x: number; y: number } => !!o);
     for (let y = 0; y < H - 1; y++) {
-      const o = ov ?? bp;
-      if (o && y >= o.y && y < o.y + o.c.h) {
-        lines.push(base(y, 0, o.x) + o.c.row(y - o.y) + base(y, o.x + o.c.w, W));
-      } else lines.push(base(y, 0, W));
+      // overlays covering this row, left to right; an overlay starting inside an earlier one is skipped
+      const here = overlays.filter((o) => y >= o.y && y < o.y + o.c.h).sort((p, q) => p.x - q.x);
+      let s = '', x = 0;
+      for (const o of here) {
+        if (o.x < x) continue;
+        s += base(y, x, o.x) + o.c.row(y - o.y);
+        x = o.x + o.c.w;
+      }
+      lines.push(s + base(y, x, W));
     }
     lines.push(this.statusBar(W));
 
@@ -860,7 +1015,10 @@ export class Tui {
       const appCursor = focus.term.modes.applicationCursorKeysMode;
       if (appCursor !== this.outerAppCursor) { buf += appCursor ? '\x1b[?1h' : '\x1b[?1l'; this.outerAppCursor = appCursor; }
       const b = focus.term.buffer.active;
-      if (focus.cursorVisible && this.mode === 'normal' && !this.prefix && b.cursorY < L.P && b.cursorX < L.pw) {
+      if (this.composing && this.mode === 'normal' && !this.prefix) {
+        const n = Math.min([...this.draft.replace(/\n/g, ' ⏎ ')].length, L.pw - 4);
+        buf += `${ESC}${L.cy + 2};${L.px + 4 + n}H\x1b[?25h`;
+      } else if (focus.cursorVisible && this.mode === 'normal' && !this.prefix && b.cursorY < L.P && b.cursorX < L.pw) {
         buf += `${ESC}${L.paneTop + b.cursorY + 1};${L.px + b.cursorX + 1}H\x1b[?25h`;
       }
     }
@@ -924,8 +1082,8 @@ export class Tui {
     const unreadBoard = hub.boardUnread('user');
     if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
     else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
-    else if (this.prefix) left = ' ^b → n:yeni  1-9:seç  j/k:gez  o:orkestra  m:ortak kutu  l:konuşmalar  s:seçim/kopyala  u:okunmamış  x:kapat  q:çık ';
-    else left = ` ^b komut · ${hub.focus || '-'}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
+    else if (this.prefix) left = ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  s:kopyala  x:kapat  q:çık ';
+    else left = ` ^b komut · ${hub.focus || '-'}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor (^b y/a/r${this.geo?.mode === 'stack' ? ', ^b i' : ''})` : ''}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
     const bg = this.prefix || this.mode !== 'normal' || this.selectMode ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
     const right = this.notice ? ` ${this.notice} ` : '';
     const room = Math.max(0, w - right.length);

@@ -2,6 +2,7 @@ import pty from 'node-pty';
 import xterm from '@xterm/headless';
 import { EventEmitter } from 'node:events';
 import type { Profile } from './config.ts';
+import { parsePrompt } from './prompt.ts';
 
 const { Terminal } = xterm;
 
@@ -11,7 +12,9 @@ export type Role = 'orchestrator' | 'worker' | 'manual';
 export type Msg = { id: number; from: string; to: string; text: string; ts: number; delivered: boolean };
 
 // Screen heuristics. Checked against the bottom of the visible screen.
-const BLOCKED = /Do you want to (proceed|make this edit|create|allow|run)|Would you like to (run|make|proceed|allow)|Allow (this|command|once)|\(y\/n\)|\[y\/N\]|Approve\b.*\?|Press enter to confirm|trust (this|the files in this) folder|Do you trust/i;
+const BLOCKED = /Do you want to (proceed|make this edit|create|allow|run)|Would you like to (run|make|proceed|allow)|Allow (this|command|once)|Approve\b.*\?|Press enter to confirm|trust (this|the files in this) folder|Do you trust/i;
+// A plain y/n question only counts while it is still the line being answered; tools rarely clear it afterwards.
+const YN = /\(y\/n\)|\[y\/N\]|\[Y\/n\]/;
 // A CLI's own limit banner: a short line of its own, optionally behind one bullet/box glyph, sitting in the last few
 // non-chrome lines of the screen (just above the idle prompt). Line-anchored on purpose: the same words inside a task
 // text, a prompt echo ('> …'), a quote or mid-sentence tool output must never trigger a handoff.
@@ -20,6 +23,16 @@ const LIMIT_CHROME = /^\s*([─━═╌┄\-]{8,}|[╭╰│┃].*|❯.*|>.*|[�
 const LIMIT_TAIL_LINES = 4;
 // Broad form, only for masking quoted screen text (handoff tasks) so it can't re-trigger a limit in the new worker.
 const LIMIT_WORDS = /(?:(?:usage|rate) limit|limit reached|(?:hit|reached) your[^\n]{0,24}?limit|out of (?:credits|extra usage))/gi;
+
+// A question is live only while nothing has been printed after it: either it sits above an open selection menu
+// (❯ …), or it is one of the last two non-empty lines. Answered questions that linger in the scrollback don't count.
+export function waitingForAnswer(screen: string): boolean {
+  const p = parsePrompt(screen);
+  if (p?.kind === 'yn') return true;
+  if (p?.kind === 'menu' && BLOCKED.test(screen)) return true;
+  const lastTwo = screen.split('\n').filter((l) => l.trim()).slice(-2).join('\n');
+  return BLOCKED.test(lastTwo) || YN.test(lastTwo);
+}
 
 export function limitBanner(screen: string): boolean {
   const lines = screen.split('\n').filter((l) => l.trim() && !LIMIT_CHROME.test(l)).slice(-LIMIT_TAIL_LINES);
@@ -64,7 +77,8 @@ export class Agent extends EventEmitter {
     this.term.parser.registerCsiHandler({ prefix: '?', final: 'l' }, (p) => { if (p.includes(25)) this.cursorVisible = false; return false; });
 
     // /bin/sh, not the user's shell: profiles are plain commands and sh exists everywhere (zsh is missing on most Linux).
-    this.proc = pty.spawn('/bin/sh', ['-c', `exec ${o.cmd}`], {
+    // `exec` keeps the agent as the pty's direct child, but `exec VAR=x cmd` would try to run "VAR=x": skip it then.
+    this.proc = pty.spawn('/bin/sh', ['-c', /^\s*\w+=/.test(o.cmd) ? o.cmd : `exec ${o.cmd}`], {
       name: 'xterm-256color', cols: o.cols, rows: o.rows, cwd: o.cwd, env: o.env,
     });
     this.proc.onData((d) => {
@@ -96,7 +110,7 @@ export class Agent extends EventEmitter {
     const tail = this.screenText(18);
     let next: Status;
     if (limitBanner(tail) && !BUSY.test(tail)) next = 'limited';
-    else if (BLOCKED.test(tail)) next = 'blocked';
+    else if (waitingForAnswer(tail)) next = 'blocked';
     // A visible "esc to interrupt" means real work, even right after launch (workers get their task as an argv
     // prompt and never pass through idle). Bare output without it is still startup noise.
     else if (BUSY.test(tail)) next = 'working';

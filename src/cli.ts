@@ -17,6 +17,8 @@ Agent'ların içinden (veya başka bir terminalden):
   coban post <id|user|all> "<mesaj>"  all = ortak kutu (herkes görür)
   coban wait [id...] [--timeout sn]   biri durunca / mesaj gelince döner
   coban read <id> [--lines n] [--scrollback] [--raw]
+  coban approvals                     izin bekleyen agent'lar ve soruları
+  coban approve <id> [yes|always|no]  izni yanıtla (varsayılan yes)
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
   coban kill <id>
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
@@ -125,6 +127,19 @@ async function main() {
       return print(r, () => `[${r.id} · ${r.status}]\n${r.screen}`);
     }
     case 'key': { const r = await call('key', { id: pos[0], keys: pos.slice(1) }); return print(r, () => 'tamam'); }
+    case 'approvals': {
+      const r = await call('approvals', {});
+      return print(r, () => r.approvals.length ? r.approvals.map((x: any) => {
+        const p = x.prompt;
+        if (!p) return `${x.id}  ${x.profile}  soru okunamadı — coban read ${x.id}`;
+        const opts = p.options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join('  ');
+        return [`${x.id}  ${x.profile}  ${p.title}${p.body.length ? ': ' + p.body.join(' · ') : ''}`, `  ? ${p.question}${opts ? '  ' + opts : ''}`].join('\n');
+      }).join('\n') : '(izin bekleyen yok)');
+    }
+    case 'approve': {
+      const r = await call('approve', { id: pos[0], choice: pos[1] ?? 'yes' });
+      return print(r, () => `${pos[0]}: "${r.picked}" seçildi`);
+    }
     case 'kill': { const r = await call('kill', { id: pos[0] }); return print(r, () => `kapatıldı: ${pos[0]}`); }
     case 'inbox': {
       const r = await call('inbox', {});
