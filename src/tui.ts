@@ -55,7 +55,8 @@ const usageBarSegs = (u: AccountUsage[], room: number): { segs: Seg[]; len: numb
     const pct = Math.max(0, a.pct5h || 0);
     const n = Math.round(clamp(pct, 0, 1) * bw);
     const col = a.limited ? '1;38;5;203' : pct > 0.8 ? '1;38;5;214' : GOLD;
-    const label = `${a.profileId} `, tail = ` ${Math.round(pct * 100)}%${a.limited ? '⧗' : ''}`;
+    const known = a.limit5h > 0; // non-Claude accounts have no usage logs
+    const label = `${a.profileId} `, tail = ` ${known ? Math.round(pct * 100) + '%' : '?'}${a.limited ? '⧗' : ''}`;
     const w = label.length + bw + tail.length + 2;
     if (len + w > room) break;
     segs.push([label, DIM], ['▰'.repeat(n), col], ['▱'.repeat(bw - n), '38;5;238'], [tail + '  ', a.limited ? col : '38;5;250']);

@@ -1,80 +1,66 @@
 # coban
 
+[![ci](https://github.com/cenkerarin/coban/actions/workflows/ci.yml/badge.svg)](https://github.com/cenkerarin/coban/actions/workflows/ci.yml)
+[![license: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
+
 A terminal app (think [herdr](https://www.bitdoze.com/herdr-agent-multiplexer/)) where **one orchestrator agent
-dispatches tasks to many other AI coding agents** — several Claude Code accounts, Codex, OpenCode, Cursor —
-and those agents can **message each other**.
+dispatches work to many AI coding agents** — several Claude Code accounts, Codex, OpenCode, Cursor — and those
+agents **talk to each other** over direct messages and a shared board.
 
-> Status: early (v0.1). Tested with a fake agent and a real Claude launch; a full multi-account run is still to be
-> battle-tested. Issues and PRs welcome.
+*Çoban* is Turkish for shepherd. The UI labels and the prompts coban gives agents are in Turkish for now.
 
-```
-                  ╔═1═════════════════╗
-                  ║    ORKESTRATÖR    ║
-                  ║  ● Claude · H1    ║
-                  ╚═════════╤═════════╝
-   ┏━━━━━━━━━━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━━━━━━━━┓
-╭─2─────────┸─────╮ ╭─3─────────┸──────────╮   ╭┄┄┄┸┄┄╮
-│      ○ h2 ✓     │ │         ! h3         │   ┆  +   ┆
-│ Claude H2·boşta │ │ Claude H3 · izin bek.│   ┆ işçi ┆
-╰─────────────────╯ ╰──────────────────────╯   ╰┄┄┄┄┄┄╯
-─ ● orkestra · Claude H1 · çalışıyor ─────────────────────
-  (the focused agent's real terminal: Claude Code, Codex, …)
-```
+![coban: conversation feed, agent graph and chat](docs/screenshot.svg)
+
+<sub>Rendered by `npm run snapshot` with scripted demo agents. Left: who said what to whom. Middle: the orchestrator
+and its workers — the dots on the edges are messages in flight. Right: the focused agent's real terminal.</sub>
+
+> **Status: early (v0.2).** Its author runs it with three Claude accounts; Codex, OpenCode and Cursor
+> profiles are wired up but barely tested. Issues and PRs welcome.
 
 ## How it works
 
-- `coban` opens a three-column TUI: a **conversation feed** on the left (agent-to-agent messages, board notes and
-  lifecycle events), the agent **graph** in the middle, and the focused agent's terminal — your **chat** — on the
-  right. Narrow terminals (< 140 cols) hide the feed; under 100 cols the graph stacks above the chat.
-- The graph is animated: messages travel along the edges as packets (board notes fan out to everyone), working
-  agents breathe, blocked ones blink, new ones fade in and recipients light up. Frames are only drawn while
-  something moves.
-- Earlier versions had the graph on top and the focused agent's terminal below. Click the `+` bubble
-  (or press Enter) to pick the **orchestrator**'s profile; it starts with a system prompt that teaches it the
-  `coban` CLI. Workers appear as bubbles wired to it — click one to switch the terminal to it.
-- Every agent runs in its own PTY; coban emulates its screen (xterm) and infers a status from it:
-  `working`, `blocked` (waiting for a permission), `limited` (usage limit), `idle`, `exited`.
-- Agents coordinate through the **`coban` CLI over a unix socket** — no MCP server needed. Anything that can run a
-  shell command can take part.
+- **One screen, three columns.** A conversation feed (messages, board notes, lifecycle events), the agent graph,
+  and the focused agent's terminal — your chat. Under 140 columns the feed hides; under 100 the graph stacks above
+  the chat.
+- **Real agents, real terminals.** Every agent runs in its own PTY; coban emulates the screen (xterm) and reads a
+  status from it: `working`, `blocked` (permission prompt), `limited` (usage limit), `idle`, `exited`.
+- **The orchestrator drives a CLI, not an MCP server.** Pick its profile with the `+` bubble; it starts with a
+  system prompt that teaches it the `coban` command, which talks to the app over a unix socket. Anything that can
+  run a shell command can take part.
+- **Alive, not busy.** Messages travel along the edges as packets (board notes fan out to everyone), working agents
+  breathe, blocked ones blink, new ones fade in. Frames are drawn only while something moves.
 
 ```
-coban agents                                   list agents + status
+coban agents                                   agents, model, status
 coban map [subdir]                             repo map: files, line counts, symbol:line
 coban spawn <profile> "<task>" [--name x] [--cwd dir] [--ctx where]...
                                                --ctx "file#sym1,sym2" | "file:10-80" | "file"
                                                inlines that code (line-numbered) into the task
-coban post <id|user> "<message>"               (alias: send) queued until the target is idle
-coban post all "<note>"                        shared board: everyone sees it
+coban post <id|user|all> "<message>"           direct message (queued until idle) or a board note (all)
 coban inbox                                    your direct messages + board notes you haven't seen
 coban board [--limit n]                        recent board notes
-coban usage                                    per-account usage: 5h %, 7-day tokens, reset; least spent first
 coban wait [id...] [--timeout s]               returns when an agent settles or mail arrives
-coban read <id> [--lines n] [--scrollback]     read an agent's screen
+coban read <id> [--lines n] [--raw]            an agent's screen, UI chrome stripped
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
-coban kill <id> · coban log
+coban usage                                    per-account usage, least spent first
+coban kill <id> · coban log                    every command takes --json
 ```
-
-`coban usage` reads each Claude profile's session logs (`$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`) and sums
-input + output + cache-creation tokens (cache reads are excluded) over the last 5 hours and 7 days. The 5-hour
-percentage is against the profile's `limit5h` in `config.json` (tokens); without it a default of 5M is used, which
-is only a rough guess — set it per account to match your plan. Non-Claude profiles show `bilinmiyor` (unknown).
-The orchestrator is told to hand new work to the least-spent account.
 
 ## Install
 
-Requires Node ≥ 24 (runs TypeScript directly, no build step) and macOS/Linux.
+Requires Node ≥ 24 (TypeScript runs directly, no build step) on macOS or Linux.
 
 ```sh
 git clone https://github.com/cenkerarin/coban && cd coban
 npm install
 ln -s "$PWD/bin/coban" ~/.local/bin/coban
-coban            # run inside the project you want the agents to work on
+cd ~/your-project && coban
 ```
 
 ## Config
 
-`~/.config/coban/config.json` is created on first run. Each profile is a command plus env vars, so multiple
-accounts are just different `CLAUDE_CONFIG_DIR`s:
+`~/.config/coban/config.json` is created on first run. A profile is a command plus env vars, so several accounts
+are just different `CLAUDE_CONFIG_DIR`s:
 
 ```json
 {
@@ -84,60 +70,74 @@ accounts are just different `CLAUDE_CONFIG_DIR`s:
     { "id": "h1", "title": "Claude H1", "cmd": "claude --allowedTools 'Bash(coban:*)'", "model": "claude-opus-5-5",
       "promptArg": "-- {prompt}", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-hesap1" }, "color": "#F6D5C8" },
     { "id": "h2", "title": "Claude H2", "cmd": "claude --allowedTools 'Bash(coban:*)'", "model": "claude-sonnet-5-5",
-      "promptArg": "-- {prompt}", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-hesap2" } },
+      "promptArg": "-- {prompt}", "env": { "CLAUDE_CONFIG_DIR": "~/.claude-hesap2" }, "limit5h": 4000000 },
     { "id": "codex", "title": "Codex", "cmd": "codex", "promptArg": "{prompt}" }
   ]
 }
 ```
 
-`model` is appended as `--model <model>`. `orchestratorModel` overrides it for whichever profile you pick as
-orchestrator — coordination is mostly reading and routing, so a cheaper model there saves the most.
+`model` is appended as `--model <model>`; `orchestratorModel` overrides it for the profile running as orchestrator —
+coordination is mostly reading and routing, so a cheaper model there saves the most.
 
-## Shared board
+## Accounts and limits
 
-Agents share decisions on a **board**: `coban post all "<note>"` (interface/schema changes, which files they are
-on, key decisions). Board notes are *pulled*, not pushed — `coban inbox` returns each note once, and workers are told
-to check it after every major step and before touching shared files. This keeps idle agents from being woken (and
-billed) for every note. The board is mirrored to `.coban/board.md` so you can follow along (a coban started on a non-default
-`COBAN_SOCK` writes `board-<sock>.md` instead), and `ctrl+b m` opens it as a panel; an unread badge `▤N` shows on
-bubbles and in the status bar.
+`coban usage` (and the bars in the status bar) read each Claude profile's session logs
+(`$CLAUDE_CONFIG_DIR/projects/**/*.jsonl`) and sum input + output + cache-creation tokens over 5 hours and 7 days.
+The percentage is against the profile's `limit5h`; plans don't publish a token number, so the 5M default is a guess —
+tune it per account. The orchestrator is told to give new work to the least-spent account.
 
-Agents you open by hand show up as `manuel` in `coban agents`; the orchestrator is told to hand work to idle manual
-agents before spawning new ones, and coban prepends the worker brief to the first message they receive.
+When a worker hits a usage limit, coban **hands its task off** to the least-spent account of the same kind: the new
+worker gets the original task plus the old worker's last screen, undelivered mail follows it, and the board and the
+orchestrator are told.
+
+## Agents talking
+
+- **Direct messages** (`coban post <id>`) are typed into the recipient's terminal once it is idle.
+- **The board** (`coban post all`) is for things everyone should know — changed interfaces, who is on which file,
+  decisions. Notes are pulled, not pushed: `coban inbox` returns each note once, and workers are told to check it
+  after every major step and before editing shared files, so idle agents aren't woken (and billed) for every note.
+  It is mirrored to `.coban/board.md`; `ctrl+b m` opens it as a panel.
+- Agents opened by hand show as `manuel`; the orchestrator is told to use idle ones before spawning new workers, and
+  coban prepends the worker brief to the first message they get.
 
 ## Keeping context small
 
-Every CLI output lands in the calling agent's context and is re-read on each later request, so coban keeps it lean:
-one-line outputs (`--json` for raw), `coban read` defaults to 20 lines with Claude Code/Codex UI chrome stripped
-(`--raw` to keep it), and the prompts tell workers to send ≤5-line summaries and put long results in
-`.coban/reports/<id>.md` (git-ignored automatically) instead of having the orchestrator read their screens.
+Each request an agent makes re-reads its whole context (Claude Code alone is ~45k tokens before any work), so coban
+keeps what lands there lean:
 
-### Precise tasks
-
-Each request a worker makes re-reads its whole context (~45k tokens of Claude Code baseline before any work), so a
-request spent *searching* is expensive while code handed over in the task is cheap. The orchestrator therefore:
-
-- learns the repo from `coban map` (≈400 tokens for this repo) instead of reading files,
-- passes the relevant code with `--ctx` — coban resolves symbols/line ranges itself (no model involved) and inlines
-  them, capped at 400 lines; workers are told not to re-read it,
-- writes tasks as **HEDEF / DOSYALAR / KISITLAR / DOĞRULAMA / BİTTİ SAYILIR** (goal, files, constraints,
-  verification, done-when).
+- one-line CLI output; `coban read` returns 20 lines with agent UI chrome stripped;
+- workers send ≤5-line summaries and put long results in `.coban/reports/<id>.md` (git-ignored automatically);
+- the orchestrator learns the repo from `coban map` (≈400 tokens for this repo) and hands workers the relevant code
+  with `--ctx` — coban extracts symbols/line ranges itself (no model involved) so workers don't spend requests
+  searching;
+- tasks follow a template: **HEDEF / DOSYALAR / KISITLAR / DOĞRULAMA / BİTTİ SAYILIR**
+  (goal, files, constraints, verification, done when).
 
 ## Keys
 
-Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed with the wheel. Mouse events inside the terminal area are forwarded
-when the agent asks for them.
+Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed with the wheel. Mouse events in the
+chat are forwarded when the agent asks for them.
 
-`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator (or pick one) · `m` board panel · `l` toggle feed ·
-`s` select mode (releases the mouse so you can select/copy text) · `u` next unread ·
-`x` close agent · `q` quit · `ctrl+b` send a literal ctrl+b.
+`ctrl+b` then: `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
+`l` toggle feed · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
+`ctrl+b` send a literal ctrl+b.
+
+## Development
+
+```sh
+npm test            # unit tests + an end-to-end run of the real TUI in a pty with fake agents
+npm run typecheck
+npm run snapshot    # regenerate docs/screenshot.svg
+```
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out.
 
 ## Known gaps
 
-No scrollback, no split view, no kitty keyboard protocol (shift+enter), no session restore. Codex's sandbox
-may block the unix socket. Status detection is screen heuristics and may need tuning per CLI version. coban captures
-the mouse; to copy text press `ctrl+b s` (select mode) or use your terminal's override (shift-drag in Ghostty/cmux,
-⌥-drag in iTerm2).
+No scrollback in the chat, no split view, no kitty keyboard protocol (shift+enter), no session restore yet.
+Codex's sandbox may block the unix socket. Status detection is screen heuristics and may need tuning per CLI
+version. coban captures the mouse: to copy text press `ctrl+b s`, or use your terminal's override (shift-drag in
+Ghostty/cmux, ⌥-drag in iTerm2).
 
 ## License
 

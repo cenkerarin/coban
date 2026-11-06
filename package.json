@@ -1,17 +1,23 @@
 {
   "name": "coban",
-  "version": "0.1.0",
-  "description": "A terminal app where one orchestrator agent dispatches tasks to many AI coding agents (multiple Claude accounts, Codex, OpenCode, Cursor) that can talk to each other.",
+  "version": "0.2.0",
+  "description": "A terminal app where one orchestrator agent dispatches work to many AI coding agents — several Claude Code accounts, Codex, OpenCode, Cursor — that message each other over a shared board.",
   "scripts": {
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/*/spawn-helper || true"
+    "postinstall": "node -e \"for(const a of ['darwin-arm64','darwin-x64','linux-x64','linux-arm64']){try{require('fs').chmodSync(require.resolve('node-pty/package.json').replace('package.json','prebuilds/'+a+'/spawn-helper'),0o755)}catch{}}\"",
+    "test": "node --disable-warning=ExperimentalWarning --test --test-concurrency=1 test/*.test.ts",
+    "typecheck": "tsc -p tsconfig.json",
+    "snapshot": "node --disable-warning=ExperimentalWarning scripts/snapshot.ts"
   },
   "keywords": [
     "ai",
     "agents",
-    "terminal",
+    "multi-agent",
     "orchestrator",
     "claude-code",
     "codex",
+    "opencode",
+    "cursor",
+    "terminal",
     "tui"
   ],
   "author": "cenkerarin",
@@ -24,8 +30,29 @@
   "bin": {
     "coban": "bin/coban"
   },
-  "private": true,
   "engines": {
     "node": ">=24"
-  }
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "typescript": "^7.0.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/cenkerarin/coban.git"
+  },
+  "homepage": "https://github.com/cenkerarin/coban#readme",
+  "bugs": {
+    "url": "https://github.com/cenkerarin/coban/issues"
+  },
+  "files": [
+    "bin/",
+    "src/",
+    "README.md",
+    "LICENSE"
+  ],
+  "os": [
+    "darwin",
+    "linux"
+  ]
 }
