@@ -38,12 +38,13 @@ export type Coban = {
   stop: () => Promise<void>;
 };
 
-export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [fakeProfile()]): Promise<Coban> {
+export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [fakeProfile()], extra: Record<string, unknown> = {}): Promise<Coban> {
   const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'coban-'));
   const sock = path.join(dir, 's.sock'); // unix socket paths are limited to ~104 bytes
   fs.writeFileSync(path.join(dir, 'config.json'), JSON.stringify({
     orchestrator: profiles[0].id,
     profiles,
+    ...extra,
   }));
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),

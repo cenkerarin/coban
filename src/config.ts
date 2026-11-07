@@ -16,6 +16,7 @@ export type Profile = {
 export type Config = {
   orchestrator: string;          // profile preselected in the orchestrator picker
   orchestratorModel?: string;    // overrides the profile's model when it runs as orchestrator
+  chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
   profiles: Profile[];
 };
 
@@ -49,6 +50,12 @@ export function nextAccount(cfg: Config): { profile: Profile; dir: string } {
   let n = 1;
   while (used.has(`h${n}`)) n++;
   return { profile: claude(n, SONNET, COLORS[(n - 1) % COLORS.length]), dir: path.join(os.homedir(), `.claude-hesap${n}`) };
+}
+
+export function saveChatWidth(share: number) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
+  raw.chatWidth = share;
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
 }
 
 export function appendProfile(p: Profile) {
