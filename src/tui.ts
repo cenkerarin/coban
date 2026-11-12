@@ -2,7 +2,7 @@ import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
 import type { AccountUsage } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
-import { saveChatWidth } from './config.ts';
+import { saveLayout } from './config.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -176,7 +176,7 @@ export class Tui {
   pickIdx = 0;
   notice = '';
   showBoard = false;
-  feedHidden = false;
+  feedHidden = false;   // restored from the config in the constructor
   chatShare = CHAT_SHARE;
   saveTimer?: NodeJS.Timeout;
   resizeUntil = 0; // until then, left/right arrows keep resizing without ^b
@@ -214,6 +214,7 @@ export class Tui {
   constructor(hub: Hub) {
     this.hub = hub;
     this.chatShare = sanitizeShare(hub.cfg.chatWidth);
+    this.feedHidden = hub.cfg.feedHidden === true;
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
@@ -357,7 +358,7 @@ export class Tui {
       case 'k': case '\x1b[A': case '\x1bOA': move(-1); break;
       case 'o': if (hub.orchestratorId) hub.setFocus(hub.orchestratorId); else this.openPicker('orchestrator'); break;
       case 'm': this.showBoard = !this.showBoard; this.prev = []; out.write('\x1b[2J'); break;
-      case 'l': this.feedHidden = !this.feedHidden; this.prev = []; out.write('\x1b[2J'); break;
+      case 'l': this.feedHidden = !this.feedHidden; this.saveSoon(); this.prev = []; out.write('\x1b[2J'); break;
       case '<': case '\x1b[D': case '\x1bOD': this.resizeChat(CHAT_SHARE_STEP); break;
       case '>': case '\x1b[C': case '\x1bOC': this.resizeChat(-CHAT_SHARE_STEP); break;
       case 's': this.selectMode = !this.selectMode; break;
@@ -390,15 +391,19 @@ export class Tui {
     if (!this.saveTimer) return;
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
-    try { saveChatWidth(this.chatShare); } catch { /* an unwritable config must not crash the TUI */ }
+    try { saveLayout({ chatWidth: this.chatShare, feedHidden: this.feedHidden }); } catch { /* an unwritable config must not crash the TUI */ }
+  }
+
+  saveSoon() {
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.flushChatWidth(), SAVE_DEBOUNCE_MS);
   }
 
   resizeChat(delta: number) {
     const a = this.hub.agents.get(this.hub.focus);
     if (this.geo?.mode === 'stack' || !a || a.exitCode !== null) return;   // nothing to resize / no chat to show
     this.chatShare = sanitizeShare(Math.round((this.chatShare + delta) * 100) / 100);
-    clearTimeout(this.saveTimer);
-    this.saveTimer = setTimeout(() => this.flushChatWidth(), SAVE_DEBOUNCE_MS);
+    this.saveSoon();
     this.resizeUntil = Date.now() + RESIZE_REPEAT_MS;
     this.prev = [];
     out.write('\x1b[2J');

@@ -1,8 +1,9 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { Agent, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
-import { BIN_DIR, DEFAULT_SOCK, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
+import { BIN_DIR, DEFAULT_SOCK, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, type ApprovalRule, type Config, type Profile } from './config.ts';
 import { allUsage, isClaude, type AccountUsage } from './usage.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 
@@ -128,7 +129,7 @@ export class Hub extends EventEmitter {
   constructor(cfg: Config) {
     super();
     this.cfg = cfg;
-    setInterval(() => { for (const a of this.agents.values()) a.tick(); }, 400).unref();
+    setInterval(() => { for (const a of this.agents.values()) a.tick(); this.autoApprove(); }, 400).unref();
   }
 
   profile(id: string): Profile {
@@ -435,6 +436,33 @@ export class Hub extends EventEmitter {
     return p.kind === 'yn' ? (choice === 'no' ? 'n' : 'y') : p.options[pickOption(p, choice)].label;
   }
 
+  // Standing approvals (config `rules`): answer "yes" to a blocked agent whose prompt fully matches a rule.
+  // Never "always"; prompts whose body may be cut off (the parser keeps at most 4 lines) are left to a human.
+  private autoAnswered = new Map<string, { key: string; at: number }>();
+  private autoBusy = false;
+  async autoApprove() {
+    const rules = this.cfg.rules;
+    if (!rules?.length || this.autoBusy) return;
+    this.autoBusy = true;
+    try {
+      for (const x of this.approvals()) {
+        const a = this.agents.get(x.id)!;
+        const p = x.prompt;
+        if (!p || p.body.length === 0 || p.body.length >= 4) continue;
+        const last = this.autoAnswered.get(x.id);
+        if (last && last.key === p.key && Date.now() - last.at < 3000) continue;   // screen hasn't caught up yet
+        const text = p.body.join(' · ');
+        const i = rules.findIndex((r) => ruleMatches(r, text, path.resolve(a.cwd), a.profile.id));
+        if (i < 0) continue;
+        this.autoAnswered.set(x.id, { key: p.key, at: Date.now() });
+        try {
+          await this.answer(x.id, 'yes', p.key);
+          this.post('coban', 'all', `kural #${i + 1} ile otomatik onaylandı: ${x.id} · ${text}`);
+        } catch { /* prompt changed or went away meanwhile */ }
+      }
+    } finally { this.autoBusy = false; }
+  }
+
   // Per-account usage, least spent first (for `coban usage` and the TUI).
   usage(): AccountUsage[] { return allUsage(this.cfg, this.limitedAt); }
 
@@ -486,6 +514,25 @@ export class Hub extends EventEmitter {
       case 'usage': return { usage: this.usage() };
       case 'approvals': return { approvals: this.approvals() };
       case 'approve': return { picked: await this.answer(p.id, (p.choice ?? 'yes') as Choice, p.key) };
+      case 'rules': return { rules: this.cfg.rules ?? [] };
+      case 'rule_add': {   // only the human: an agent must not be able to widen its own permissions
+        if (caller !== 'user') throw new Error('kural ekleme yalnız kullanıcıdan (agent içinden değil)');
+        const r: ApprovalRule = { match: String(p.match ?? ''), ...(p.cwd ? { cwd: String(p.cwd) } : {}), ...(p.profile ? { profile: String(p.profile) } : {}) };
+        ruleRegex(r.match);
+        this.cfg.rules = [...(this.cfg.rules ?? []), r];
+        saveRules(this.cfg.rules);
+        return { n: this.cfg.rules.length };
+      }
+      case 'rule_rm': {
+        if (caller !== 'user') throw new Error('kural silme yalnız kullanıcıdan (agent içinden değil)');
+        const rules = [...(this.cfg.rules ?? [])];
+        const i = Number(p.n) - 1;
+        if (!Number.isInteger(i) || i < 0 || i >= rules.length) throw new Error(`böyle bir kural yok: ${p.n}`);
+        const [gone] = rules.splice(i, 1);
+        this.cfg.rules = rules;
+        saveRules(rules);
+        return { removed: gone };
+      }
       case 'kill': this.kill(p.id); return { ok: true };
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);

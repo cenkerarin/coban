@@ -202,7 +202,7 @@ Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed wi
 chat are forwarded when the agent asks for them.
 
 `ctrl+b` then: `c` input line · `y`/`a`/`r` approve / always / reject · `i` next approval · `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
-`l` toggle feed · `←`/`→` (or `<`/`>`) widen / narrow the chat, arrows repeat for a second without `ctrl+b` (saved as `chatWidth`, 0.3-0.6) · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
+`l` toggle feed · `←`/`→` (or `<`/`>`) widen / narrow the chat, arrows repeat for a second without `ctrl+b` (saved as `chatWidth`, 0.3-0.6; the `l` feed toggle is saved as `feedHidden`) · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
 `ctrl+b` send a literal ctrl+b.
 
 ## Development
@@ -225,3 +225,10 @@ Ghostty/cmux, ⌥-drag in iTerm2).
 ## License
 
 MIT
+
+### Standing approvals
+
+`coban rule add "<regex>" [--cwd dir] [--profile id]` auto-answers *yes* (never "always") to a permission prompt whose text
+matches. The regex is anchored (must match the whole text, the body lines of `coban approvals` joined by ` · `), there are no
+default rules, prompts with 4+ body lines are never auto-approved, and only the user (not an agent) can add or remove rules.
+`coban rule list` / `coban rule rm <n>`; rules live in the config's `rules`.

@@ -1,7 +1,7 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, SOCK } from './config.ts';
+import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, type ApprovalRule } from './config.ts';
 import { repoMap, snippets } from './context.ts';
 import { allUsage, type AccountUsage } from './usage.ts';
 
@@ -21,6 +21,10 @@ Agent'ların içinden (veya başka bir terminalden):
   coban read <id> [--lines n] [--scrollback] [--raw]
   coban approvals                     izin bekleyen agent'lar ve soruları
   coban approve <id> [yes|always|no]  izni yanıtla (varsayılan yes)
+  coban rule add "<regex>" [--cwd dizin] [--profile id]
+                                      kalıcı onay kuralı: izin metni regex ile TAM eşleşirse otomatik "yes"
+                                      (metin: coban approvals'taki gövde satırları " · " ile birleşik; varsayılan kural yok)
+  coban rule list | coban rule rm <no>
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
   coban kill <id>
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
@@ -156,6 +160,44 @@ async function main() {
     case 'approve': {
       const r = await call('approve', { id: pos[0], choice: pos[1] ?? 'yes' });
       return print(r, () => `${pos[0]}: "${r.picked}" seçildi`);
+    }
+    case 'rule': {
+      const sub = pos[0];
+      const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+      // Edit through the running coban (it keeps the rules in memory); with it closed, edit the config file.
+      const viaHub = async (method: string, params: object, offline: () => any) => {
+        try { return await call(method, params); }
+        catch (e: any) { if (!/çalışmıyor/.test(e.message)) throw e; return offline(); }
+      };
+      if (sub === 'add') {
+        if (!pos[1]) { console.error('kullanım: coban rule add "<regex>" [--cwd dizin] [--profile id]'); process.exit(1); }
+        const rule: ApprovalRule = { match: pos[1], ...(str(flags.cwd) ? { cwd: str(flags.cwd) } : {}), ...(str(flags.profile) ? { profile: str(flags.profile) } : {}) };
+        ruleRegex(rule.match);
+        const r = await viaHub('rule_add', rule, () => {
+          const rules = [...(loadConfig().rules ?? []), rule];
+          saveRules(rules);
+          return { n: rules.length };
+        });
+        return print(r, () => `kural #${r.n} eklendi`);
+      }
+      if (sub === 'rm') {
+        const r = await viaHub('rule_rm', { n: pos[1] }, () => {
+          const rules = loadConfig().rules ?? [];
+          const i = Number(pos[1]) - 1;
+          if (!Number.isInteger(i) || i < 0 || i >= rules.length) throw new Error(`böyle bir kural yok: ${pos[1]}`);
+          const [removed] = rules.splice(i, 1);
+          saveRules(rules);
+          return { removed };
+        });
+        return print(r, () => `kural silindi: ${r.removed.match}`);
+      }
+      if (sub === 'list' || sub === undefined) {
+        const r = await viaHub('rules', {}, () => ({ rules: loadConfig().rules ?? [] }));
+        return print(r, () => r.rules.length
+          ? r.rules.map((x: ApprovalRule, i: number) => `${i + 1}  /${x.match}/${x.cwd ? `  cwd=${x.cwd}` : ''}${x.profile ? `  profil=${x.profile}` : ''}`).join('\n')
+          : '(kural yok)');
+      }
+      console.error('kullanım: coban rule add|list|rm'); process.exit(1);
     }
     case 'kill': { const r = await call('kill', { id: pos[0] }); return print(r, () => `kapatıldı: ${pos[0]}`); }
     case 'inbox': {
