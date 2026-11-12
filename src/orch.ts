@@ -55,3 +55,9 @@ export function tail(text: string, lines = 40, chars = 3000): string {
   if (t.length > chars) t = '…' + t.slice(-chars);
   return t;
 }
+
+// Config `verifyAllow`: when set, a verify command must fully match one of these regexes; unset keeps the old behaviour.
+export function checkVerify(cmd: string | undefined, allow: string[] | undefined) {
+  if (!cmd || !allow) return;
+  if (!allow.some((r) => new RegExp(`^(?:${r})$`).test(cmd))) throw new Error(`doğrulama komutu verifyAllow listesinde değil: ${cmd}`);
+}

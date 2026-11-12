@@ -11,6 +11,7 @@ export type Profile = {
   env?: Record<string, string>;
   color?: string;
   limit5h?: number;                  // token budget per 5h window for `coban usage` (claude only; default in usage.ts)
+  network?: boolean;                 // codex: opt in to network access inside its sandbox (see launchFor in hub.ts); off by default
 };
 
 export type Config = {
@@ -20,6 +21,7 @@ export type Config = {
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
   feedHidden?: boolean;          // feed column hidden (^b l); saved so the panel layout survives restarts
   rules?: ApprovalRule[];        // standing approvals, see `coban rule`; none by default
+  verifyAllow?: string[];        // spawn --verify: when set, only commands fully matching one of these regexes may run
   verifyTries?: number;          // spawn --verify: how many failed runs are sent back to the worker before giving up (default 3)
   profiles: Profile[];
 };

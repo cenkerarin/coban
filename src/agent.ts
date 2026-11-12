@@ -48,8 +48,25 @@ export function maskLimitText(text: string): string {
 // Codex "■ Your access token could not be refreshed … Please log out and sign in again.", OpenCode
 // "Bad Request: {"error":{"code":"content-blocked",…,"type":"agent_router_api_error"}}".
 // Codex prints non-fatal MCP startup warnings (⚠, incl. an HTTP 401 JSON body); those must not match.
-// Line-anchored (after an optional status glyph), like LIMIT_BANNER: the same words mid-sentence must not match.
-const AGENT_ERROR = /^(?:[■✗✖×!]\s*)?(?:error:?\s*)?(?:Press any key to log in|Your access token could not be refreshed|(?:you are )?not (?:logged|signed) in(?:\s*[.!:(]|\s*$)|authentication (?:failed|required)|please run `?[\w-]+ (?:auth )?login|(?:Bad Request|Unauthorized|Forbidden|Payment Required|Service Unavailable):?\s*\{\s*"error")/i;
+// Only known, whole error lines (after an optional status glyph) count: a broad pattern would let any text a worker
+// prints (or reads from a file) flip it to 'error'. Each pattern maps to a fixed category; the raw line is shown to
+// the user in the feed but never forwarded to the orchestrator (see errorKind / Hub).
+const ERROR_LINES: [RegExp, ErrorKind][] = [
+  [/^Press any key to log in\.*$/, 'login'],                                               // Cursor
+  [/^(?:Not logged in|Invalid API key) · Please run \/login$/, 'login'],                   // Claude Code
+  [/^Your access token could not be refreshed because your refresh token has expired\./, 'token'], // Codex
+  [/^(?:Bad Request|Unauthorized|Forbidden|Payment Required|Service Unavailable): \{"error":\{"code":"[\w-]+"/, 'provider'], // OpenCode
+];
+const ERROR_GLYPH = /^(?:[■✗✖×!]\s*)?/;
+export type ErrorKind = 'login' | 'token' | 'provider';
+export const ERROR_LABEL: Record<ErrorKind, string> = {
+  login: 'giriş yapılmamış', token: 'erişim token\'ının süresi dolmuş', provider: 'sağlayıcı isteği reddediyor',
+};
+export function errorKind(line: string | null | undefined): ErrorKind | null {
+  const l = (line ?? '').replace(ERROR_GLYPH, '');
+  for (const [re, k] of ERROR_LINES) if (re.test(l)) return k;
+  return null;
+}
 const ERROR_TAIL_LINES = 12;
 
 // The error line, if the bottom of the screen shows one (box glyphs stripped, at most 160 chars).
@@ -60,7 +77,7 @@ export function agentError(screen: string): string | null {
     const l = raw.replace(/^[\s┃│║▌]+|[\s┃│║▐]+$/g, '');
     if (/^⚠/.test(l)) { warning = true; continue; }
     if (/^[■●•›>✗✖×]/.test(l) || !/^\s/.test(raw)) warning = false;
-    if (!warning && AGENT_ERROR.test(l)) return l.slice(0, 160);
+    if (!warning && errorKind(l)) return l.slice(0, 160);
   }
   return null;
 }

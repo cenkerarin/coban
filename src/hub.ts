@@ -3,30 +3,41 @@ import net from 'node:net';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { notify, type Notifier } from './notify.ts';
-import { Agent, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
+import { Agent, ERROR_LABEL, errorKind, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
 import { BIN_DIR, DEFAULT_SOCK, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, type ApprovalRule, type Config, type Profile } from './config.ts';
 import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
-import { addWorktree, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
+import { addWorktree, checkVerify, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
 
 // What each non-Claude CLI needs to cooperate with coban, added at launch unless the profile already decides it:
-// - codex: its default sandbox denies the unix socket (`coban: connect EPERM …/coban.sock`), so every coban call
-//   fails. workspace-write + network_access lets it connect; commands still run sandboxed to the workspace.
-// - opencode: allow `coban …` shell calls without a permission prompt (inline config, merged with the user's).
+// - codex: its default (read-only) sandbox can't use coban's unix socket. coban runs it with workspace-write and adds
+//   the socket's directory as a writable root. Network stays OFF unless the profile sets `network: true`: on some
+//   platforms (macOS Seatbelt) the sandbox then still refuses the socket (`coban: connect EPERM …/coban.sock`) and
+//   every coban call fails. That is the price of the safer default; opt in per profile if you hit it.
+// - opencode: allow only coban's read/messaging subcommands without a prompt (inline config, merged with the user's);
+//   approve/key/kill/spawn/rule still ask, and the hub refuses them from workers anyway.
 // Claude gets the same through --allowedTools 'Bash(coban:*)' in its cmd. Cursor has no per-run allow flag: its
 // prompts go through `coban approvals` (or add "Shell(coban)" to ~/.cursor/cli-config.json permissions.allow).
+// coban subcommands a worker may run without asking: reading and messaging only.
+export const WORKER_COMMANDS = ['post', 'send', 'inbox', 'board', 'agents', 'read', 'map', 'wait'];
+// RPC methods that act on other agents or widen permissions: only the user or the orchestrator may call them.
+const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
+
 export function launchFor(p: Profile): { args: string[]; env: Record<string, string> } {
   const bin = p.cmd.trim().split(/\s+/)[0].split('/').pop();
   const args: string[] = [], env: Record<string, string> = {};
-  if (bin === 'codex' && !/\s(-s|--sandbox|--full-auto|--dangerously-bypass-approvals-and-sandbox)\b|network_access/.test(' ' + p.cmd)) {
-    args.push('--sandbox workspace-write', '-c sandbox_workspace_write.network_access=true');
+  if (bin === 'codex' && !/\s(-s|--sandbox|--full-auto|--dangerously-bypass-approvals-and-sandbox)\b|network_access|writable_roots/.test(' ' + p.cmd)) {
+    args.push('--sandbox workspace-write', `-c ${q(`sandbox_workspace_write.writable_roots=${JSON.stringify([path.dirname(SOCK)])}`)}`);
+    if (p.network) args.push('-c sandbox_workspace_write.network_access=true');
   }
   if (bin === 'opencode' && !p.env?.OPENCODE_CONFIG_CONTENT && !p.env?.OPENCODE_PERMISSION) {
-    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ permission: { bash: { 'coban *': 'allow' } } });
+    const bash: Record<string, string> = {};
+    for (const c of WORKER_COMMANDS) { bash[`coban ${c}`] = 'allow'; bash[`coban ${c} *`] = 'allow'; }
+    env.OPENCODE_CONFIG_CONTENT = JSON.stringify({ permission: { bash } });
   }
   return { args, env };
 }
@@ -158,6 +169,7 @@ export class Hub extends EventEmitter {
 
   spawn(o: { profile: string; role: Role; task?: string; name?: string; cwd?: string; worktree?: string | true; verify?: string }): Agent {
     const p = this.profile(o.profile);
+    checkVerify(o.verify, this.cfg.verifyAllow);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
     const launch = launchFor(p);
     const parts = [p.cmd, ...launch.args];
@@ -217,7 +229,9 @@ export class Hub extends EventEmitter {
         const to = orch && orch !== a.id ? orch : 'user';
         queueMicrotask(() => {
           try {
-            this.post('coban', to, `${a.id} (${a.profile.title}) çalışamıyor — giriş veya sağlayıcı hatası: "${a.error}". ` +
+            // Fixed category only: the raw line is worker screen text (untrusted) and must not reach the orchestrator.
+            const kind = errorKind(a.error);
+            this.post('coban', to, `${a.id} (${a.profile.title}) çalışamıyor — ${kind ? ERROR_LABEL[kind] : 'giriş veya sağlayıcı hatası'}. ` +
               (to === 'user' ? 'Hesabı kontrol et (giriş yap / sağlayıcıyı değiştir).' : 'Görevi başka bir profile ver ve kullanıcıya bildir; bu agent kendiliğinden düzelmez.'));
           } catch {}
         });
@@ -266,6 +280,7 @@ export class Hub extends EventEmitter {
   // Done = settled idle/exited after having worked (and its verify gate passed or gave up), or no longer exists.
   enqueue(o: { profile: string; task?: string; name?: string; cwd?: string; worktree?: string | true; verify?: string; after: string[] }): string {
     const p = this.profile(o.profile);
+    checkVerify(o.verify, this.cfg.verifyAllow);
     for (const d of o.after) if (!this.agents.has(d) && !this.queue.some((j) => j.id === d)) throw new Error(`agent yok: ${d}`);
     const id = this.newId(o.name || p.id);
     this.queue.push({ id, after: o.after, spawn: { profile: o.profile, task: o.task, cwd: o.cwd, worktree: o.worktree, verify: o.verify } });
@@ -602,7 +617,7 @@ export class Hub extends EventEmitter {
       const a = this.agents.get(id)!;
       return {
         id, profile: a.profile.id, model: a.model, role: a.role, status: a.status,
-        ...(a.status === 'error' ? { error: a.error } : {}),
+        ...(a.status === 'error' ? { error: (k => k ? ERROR_LABEL[k] : 'hata')(errorKind(a.error)) } : {}),
         ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
         ...(this.jobs.get(id)?.verify ? { verify: this.jobs.get(id)!.verifyState ?? 'pending' } : {}),
         task: a.task.replace(/\s+/g, ' ').slice(0, 60),
@@ -613,7 +628,11 @@ export class Hub extends EventEmitter {
   }
 
   // ── RPC over unix socket (used by the `coban` CLI inside agents) ─────
+  // Callers are 'user' (the CLI outside agents) or an agent id. Workers only read and message.
+  private privileged(caller: string) { return caller === 'user' || (!!this.orchestratorId && caller === this.orchestratorId); }
+
   async handle(caller: string, method: string, p: any): Promise<unknown> {
+    if (PRIVILEGED.has(method) && !this.privileged(caller)) throw new Error(`${method} yalnız kullanıcıdan veya orkestratörden (${caller} işçi)`);
     switch (method) {
       case 'agents': {
         const st = this.stats();
@@ -624,6 +643,8 @@ export class Hub extends EventEmitter {
       }
       case 'history': return { history: readHistory(p.limit ?? 50) };
       case 'spawn': {
+        // Redundant with PRIVILEGED today, but --worktree/--verify run git/shell as coban: keep the check next to them.
+        if ((p.worktree || p.verify) && !this.privileged(caller)) throw new Error('--worktree/--verify yalnız kullanıcıdan veya orkestratörden');
         const o = { profile: p.profile, task: p.task, name: p.name, cwd: p.cwd, worktree: p.worktree, verify: p.verify };
         if (p.after?.length) return { id: this.enqueue({ ...o, after: p.after }), queued: true };
         const a = this.spawn({ ...o, role: 'worker' });

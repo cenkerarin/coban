@@ -107,7 +107,7 @@ Note: the prompts coban gives the orchestrator and workers, and `coban --help`, 
 | a profile is missing | its CLI is not on `PATH` when coban first ran: install it and delete the config file, or add the profile by hand |
 | `coban çalışmıyor` from a `coban ...` command | open the TUI first with plain `coban`: those commands talk to the running app |
 | stale socket after a crash | `rm ~/.coban/coban.sock` |
-| Codex: `coban: connect EPERM` | coban launches codex with `--sandbox workspace-write -c sandbox_workspace_write.network_access=true` so it can reach the socket; if your profile sets its own `--sandbox`, it must allow that too |
+| Codex: `coban: connect EPERM` | coban launches codex with `--sandbox workspace-write` and the socket's directory as a writable root, **without network access**. Some sandboxes (macOS Seatbelt) still refuse the unix socket then; opt in per profile with `"network": true` (adds `-c sandbox_workspace_write.network_access=true`: the agent's commands can then reach the internet too). If your profile sets its own `--sandbox`, it must allow the socket itself |
 | Cursor asks before every `coban` call | add `"Shell(coban)"` to `permissions.allow` in `~/.cursor/cli-config.json`, or answer from coban's approval box |
 
 ### From source (development)
@@ -197,7 +197,8 @@ Three `coban spawn` flags let the orchestrator hand off sequencing, isolation an
 - **`--verify "<cmd>"`** runs `cmd` with `sh` in the worker's directory each time it settles after working. On
   failure the exit code and the output's last 40 lines are sent back to the worker to fix; after `verifyTries`
   failures (config, default 3) or if the worker has exited, the orchestrator is told instead. A pass is reported to
-  the orchestrator, and `coban agents` shows `doğrulama:<state>`.
+  the orchestrator, and `coban agents` shows `doğrulama:<state>`. Set `verifyAllow` in the config (a list of
+  regexes, each must match the whole command) to restrict which commands may run; unset, any command is accepted.
 
 ```sh
 coban spawn h1 "HEDEF: …" --name api --worktree --verify "npx tsc --noEmit && npm test"
@@ -235,6 +236,16 @@ npm run snapshot    # regenerate docs/screenshot.svg
 ```
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out.
+
+### Who may do what
+
+Only the user (the `coban` CLI outside an agent) and the orchestrator may call `spawn` (incl. `--worktree` /
+`--verify`), `approve`, `key`, `kill` and `rule`; workers read and message (`post`, `send`, `inbox`, `board`,
+`agents`, `read`, `map`, `wait`), so a worker cannot approve its own permission prompt. OpenCode workers get a
+prompt-free allow only for those read/messaging subcommands. When an agent can't work, the orchestrator is told a
+fixed category (no login / expired token / provider rejected), never the raw screen line (shown to you in the feed).
+The caller id comes from `COBAN_AGENT` in the agent's environment and is not authenticated: a worker that rewrites
+it can still pose as the user. These checks stop prompt-injected or confused agents, not a deliberately hostile one.
 
 ## Known gaps
 
