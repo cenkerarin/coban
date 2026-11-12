@@ -250,11 +250,11 @@ export class Tui {
         this.event(id, '✦', hex(a.profile.color), `${role} açıldı · ${a.profile.title}`, a.task ? flat(a.task.replace(/^\[coban\][\s\S]*?GÖREV:\s*/, '')) : undefined);
       } else if (prev !== a.status) {
         if (a.status === 'working') { this.workingSince.set(id, now); this.doneCandidates.delete(id); }
-        if (a.status === 'blocked') this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
+        if (a.status === 'blocked' && id !== hub.orchestratorId) this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
         if (a.status === 'limited') this.event(id, '⧗', STATUS_STYLE.limited[1], 'kullanım limiti doldu');
         if (a.status === 'error') this.event(id, '✗', STATUS_STYLE.error[1], 'çalışamıyor (giriş/sağlayıcı hatası)', a.error);
         if (a.status === 'exited') this.event(id, '×', DIM, 'süreç kapandı');
-        if (a.status === 'idle' && prev === 'working') this.doneCandidates.set(id, now);
+        if (a.status === 'idle' && prev === 'working' && id !== hub.orchestratorId) this.doneCandidates.set(id, now);
         if (a.status === 'idle' && prev === 'starting') this.event(id, '○', DIM, 'hazır');
       }
       this.lastStatus.set(id, a.status);

@@ -66,6 +66,8 @@ export function agentError(screen: string): string | null {
 }
 const BUSY = /esc to interrupt|esc to cancel|ctrl\+c to (interrupt|stop)|Working \(|Thinking\.\.\./i;
 const QUIET_MS = 1500;
+const BUSY_HOLD_MS = 2500; // a spinner/"esc to interrupt" seen this recently still counts as working (redraw gaps)
+const RELEASE_MS = 3000;   // working → idle only after this much output silence (no flicker)
 
 export class Agent extends EventEmitter {
   id: string;
@@ -79,6 +81,7 @@ export class Agent extends EventEmitter {
   settledSeq = 0;        // bumps every time the agent settles (idle/blocked/limited/exited)
   unread = false;        // settled while not focused
   lastOutput = Date.now();
+  lastBusy = 0;           // last time a BUSY marker was on screen
   cursorVisible = true;
   exitCode: number | null = null;
   inbox: Msg[] = [];
@@ -139,8 +142,9 @@ export class Agent extends EventEmitter {
     else if (waitingForAnswer(tail)) next = 'blocked';
     // A visible "esc to interrupt" means real work, even right after launch (workers get their task as an argv
     // prompt and never pass through idle). Bare output without it is still startup noise.
-    else if (BUSY.test(tail)) next = 'working';
-    else if (Date.now() - this.lastOutput < QUIET_MS) next = this.status === 'starting' ? 'starting' : 'working';
+    else if (BUSY.test(tail)) { this.lastBusy = Date.now(); next = 'working'; }
+    else if (this.status === 'working' && Date.now() - this.lastBusy < BUSY_HOLD_MS) next = 'working';
+    else if (Date.now() - this.lastOutput < (this.status === 'working' ? RELEASE_MS : QUIET_MS)) next = this.status === 'starting' ? 'starting' : 'working';
     else next = 'idle';
     this.error = next === 'error' ? err! : '';
     this.setStatus(next);
