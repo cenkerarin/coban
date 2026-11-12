@@ -17,6 +17,7 @@ export type Config = {
   orchestrator: string;          // profile preselected in the orchestrator picker
   orchestratorModel?: string;    // overrides the profile's model when it runs as orchestrator
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
+  verifyTries?: number;          // spawn --verify: how many failed runs are sent back to the worker before giving up (default 3)
   profiles: Profile[];
 };
 
