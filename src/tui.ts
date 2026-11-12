@@ -330,7 +330,7 @@ export class Tui {
     // CONFIRM_GUARD_MS are ignored, so a "y" typed into an agent just as it pops up can't approve it.
     const cf = this.hub.confirms[0];
     if (cf) {
-      if (Date.now() - cf.at < CONFIRM_GUARD_MS) return;
+      if (cf.shownAt === undefined || Date.now() - cf.shownAt < CONFIRM_GUARD_MS) return;   // timed from when it was drawn
       if (d === 'y' || d === 'Y') this.hub.resolveConfirm(cf.id, true);
       else if (d === 'n' || d === 'N' || d === '\x1b' || d === '\x03') this.hub.resolveConfirm(cf.id, false);
       return;
@@ -865,6 +865,7 @@ export class Tui {
   // The pending user-rights request from outside (anon socket caller), every field in full, wrapped.
   confirmBox(W: number, H: number): { c: Canvas; x: number; y: number } {
     const cf = this.hub.confirms[0];
+    cf.shownAt ??= Date.now();
     const w = clamp(W - 8, 30, 100);
     const wrap = (l: string) => { const r: string[] = []; for (let i = 0; i < l.length || i === 0; i += w - 4) r.push(l.slice(i, i + w - 4)); return r; };
     const body = [

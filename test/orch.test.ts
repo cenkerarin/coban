@@ -97,12 +97,12 @@ test('cli: spawn --after shows the queue, --verify state appears in agents', asy
   const { startCoban } = await import('./helpers.ts');
   const c = await startCoban();
   try {
-    assert.equal(await c.cli('', 'spawn', 'fake', 'ilk', '--name', 'a1', '--verify', 'true'), 'açıldı: a1');
+    assert.equal(await c.cli('', 'spawn', 'fake', 'ilk', '--name', 'a1', '--verify', 'sleep 8; true'), 'açıldı: a1');
     assert.equal(await c.cli('', 'spawn', 'fake', 'ikinci', '--name', 'b1', '--after', 'a1'), 'kuyrukta: b1 (bekliyor: a1)');
     const before = await c.cli('', 'agents');
     assert.match(before, /^b1 {2}fake {2}kuyrukta \(bekliyor: a1\)/m);
     assert.match(await c.cli('', 'spawn', 'fake', 'x', '--after', 'yok'), /ERR .*agent yok: yok/);
-    await until(async () => /^b1 .*fake(?!.*kuyrukta)/m.test(await c.cli('', 'agents')), 15000);
+    await until(async () => /^b1 .*fake(?!.*kuyrukta)/m.test(await c.cli('', 'agents')), 25000);
     assert.match(await c.cli('', 'agents'), /^a1 .*doğrulama:pass/m);
   } finally { await c.stop(); }
 });

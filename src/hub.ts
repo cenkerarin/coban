@@ -37,7 +37,9 @@ export function agentText(text: string): string {
   return t.split(/\r\n|\r|\n|\u2028|\u2029|\u0085/).map((l, i) => (i === 0 ? l : '  » ' + l)).join('\n');
 }
 
-export type Confirm = { id: number; method: string; lines: string[]; at: number; resolve: (ok: boolean) => void };
+// shownAt: when the TUI first drew it; keys before shownAt + guard don't count (a box that was slow to appear must not
+// catch a "y" typed for something else).
+export type Confirm = { id: number; method: string; lines: string[]; at: number; shownAt?: number; resolve: (ok: boolean) => void };
 
 // What the human is asked to confirm: every field that matters, in full (the request may come from a hostile process;
 // a cut-off verify command or regex would hide exactly the dangerous part). Control characters are made visible.
@@ -187,6 +189,7 @@ export class Hub extends EventEmitter {
   confirmMs = 120_000;                             // an unanswered confirmation is refused after this
   confirms: Confirm[] = [];                        // at most one at a time
   private confirmSeq = 0;
+  private confirmFreeAt = 0;                       // no new box until then: one can't pop up right under the last keypress
 
   constructor(cfg: Config) {
     super();
@@ -696,6 +699,7 @@ export class Hub extends EventEmitter {
   // Ask the human in the TUI whether an anon socket request may run with user rights. Resolves false on refusal/timeout.
   requestConfirm(method: string, p: any): Promise<boolean> {
     if (this.confirms.length) return Promise.reject(new Error(`${method}: arayüzde zaten onay bekleyen bir istek var`));
+    if (Date.now() < this.confirmFreeAt) return Promise.reject(new Error(`${method}: biraz sonra tekrar dene (onay kutusu az önce kapandı)`));
     return new Promise((resolve) => {
       const c: Confirm = { id: ++this.confirmSeq, method, lines: describeRequest(method, p), at: Date.now(), resolve: () => {} };
       const timer = setTimeout(() => this.resolveConfirm(c.id, false), this.confirmMs);
@@ -709,6 +713,7 @@ export class Hub extends EventEmitter {
     const c = this.confirms.find((x) => x.id === id);
     if (!c) return;
     this.confirms = this.confirms.filter((x) => x !== c);
+    this.confirmFreeAt = Date.now() + 1500;
     c.resolve(ok);
     this.emit('change');
   }

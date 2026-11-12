@@ -155,6 +155,9 @@ test('F1/F3: no user secret exists; identity is the agent token; outside request
   assert.ok(c.screen().includes('ONAY GEREKİYOR'), 'a key right as the box pops up is ignored');
   c.write('n');
   assert.match(await spoof, /ERR .*kill: kullanıcı arayüzde onaylamadı/);
+  // right after a box closes no new one can pop up under the user's next keypress
+  await assert.rejects(rpc(c.sock, undefined, 'kill', { id: 'w1' }), /biraz sonra tekrar dene/);
+  await sleep(1600);
   assert.match(await c.cli('', 'agents'), /^w1 /m, 'w1 still alive');
   for (const caller of ['user', 'orkestra']) {   // raw `caller` fields are ignored the same way
     await assert.rejects(c.confirming(rpc(c.sock, undefined, 'approve', { id: 'w1' }, { caller }), 'n'), /onaylamadı/, caller);
@@ -176,6 +179,7 @@ test('F1/F3: no user secret exists; identity is the agent token; outside request
   assert.ok(c.screen().replace(/[│\s]+/g, '').includes(evil), 'the whole regex is shown, wrapped, not cut off');
   c.write('\x1b');
   assert.match(await pend, /ERR .*onaylamadı/);
+  await sleep(1600);
   assert.equal(JSON.parse(fs.readFileSync(cfgPath, 'utf8')).rules, undefined);
   assert.match(await c.cli('', 'rule', 'add', 'x'), /kural #1 eklendi/, 'the human, confirming, still can');
 

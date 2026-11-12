@@ -73,15 +73,15 @@ export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [f
   // There is no user secret: a request for user rights from outside an agent waits for "y" in the coban window.
   // `confirming(work)` plays the human: while `work` runs, it answers every confirmation box that shows up.
   const confirming = async <T>(work: Promise<T>, answer = 'y'): Promise<T> => {
-    let done = false;
+    let done = false, answered = false;
     const r = work.finally(() => { done = true; });
     (async () => {
       while (!done) {
-        if (screen().includes('ONAY GEREKİYOR')) { await sleep(700); if (!done && screen().includes('ONAY GEREKİYOR')) p.write(answer); }
+        if (screen().includes('ONAY GEREKİYOR')) { await sleep(700); if (!done && screen().includes('ONAY GEREKİYOR')) { p.write(answer); answered = true; } }
         await sleep(100);
       }
     })();
-    return r;
+    try { return await r; } finally { if (answered) await sleep(1600); }   // the hub opens no new box right after one
   };
   // '' runs as the human; an agent id runs with that agent's own COBAN_TOKEN (agent_token RPC, confirmed once).
   const tokens = new Map<string, string>();
