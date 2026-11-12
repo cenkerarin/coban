@@ -37,9 +37,6 @@ export const BIN_DIR = path.join(ROOT, 'bin');
 export const STATE_DIR = path.join(os.homedir(), '.coban');
 export const DEFAULT_SOCK = path.join(STATE_DIR, 'coban.sock');
 export const SOCK = process.env.COBAN_SOCK || DEFAULT_SOCK;
-// The human's credential for the hub socket: a random token written (0600) next to the socket each time coban starts.
-// Agents get their own per-agent token in COBAN_TOKEN instead and never this one (see Hub.spawn / cli.ts call).
-export const TOKEN_PATH = SOCK.replace(/\.sock$/, '') + '.token';
 export const CONFIG_PATH = process.env.COBAN_CONFIG || path.join(os.homedir(), '.config', 'coban', 'config.json');
 
 export const OPUS = 'claude-opus-5-5';

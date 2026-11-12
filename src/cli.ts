@@ -1,7 +1,7 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, TOKEN_PATH, type ApprovalRule } from './config.ts';
+import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, type ApprovalRule } from './config.ts';
 import { repoMap, snippets } from './context.ts';
 import { allUsage, fmtEta, fmtTokens, type AccountUsage } from './usage.ts';
 import { readHistory } from './history.ts';
@@ -38,23 +38,23 @@ Agent'ların içinden (veya başka bir terminalden):
   coban history [--limit n]           kalıcı oturum geçmişi (olaylar + mesajlar, ~/.coban/history.jsonl)
   coban account add                   yeni Claude hesabı ekle: giriş yaptırır, profili config'e yazar (arayüz kapalıyken)
 
+spawn/approve/key/kill/rule agent dışından (bu terminalden) çalıştırılınca coban penceresinde onay ister: y onayla, n reddet.
 Her komut --json ile ham çıktı verir.`;
 
-// Inside an agent's environment (coban sets COBAN_TOKEN/COBAN_AGENT there). Such a process never reaches for the
-// user token or edits rules offline, even when the variable is emptied.
+// Inside an agent's environment (coban sets COBAN_TOKEN/COBAN_AGENT there): never edit rules offline from here.
 const inAgent = () => 'COBAN_TOKEN' in process.env || 'COBAN_AGENT' in process.env;
 
-// The hub knows callers by token only: an agent's own COBAN_TOKEN, else (a human's terminal) the user token file.
-function token(): string {
-  if (inAgent()) return process.env.COBAN_TOKEN ?? '';
-  try { return fs.readFileSync(TOKEN_PATH, 'utf8').trim(); } catch { return ''; }
-}
+// The hub knows callers by token only: an agent's own COBAN_TOKEN. A human's terminal has none; its privileged
+// requests (spawn/approve/key/kill/rule) wait for a "y" in the coban window.
+const token = () => process.env.COBAN_TOKEN ?? '';
+const NEEDS_CONFIRM = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
 
 function call(method: string, params: object): Promise<any> {
   return new Promise((resolve, reject) => {
     const s = net.connect(SOCK);
     let buf = '';
     // `caller` is ignored by this hub (identity = token); it only keeps an older coban still running mid-upgrade working.
+    if (!token() && NEEDS_CONFIRM.has(method) && process.stderr.isTTY) console.error('coban: arayüzde onay bekleniyor (y onayla · n reddet)…');
     s.on('connect', () => s.write(JSON.stringify({ token: token(), caller: process.env.COBAN_AGENT || 'user', method, params }) + '\n'));
     s.on('data', (d) => {
       buf += d;

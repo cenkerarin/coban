@@ -244,14 +244,21 @@ Only the user (the `coban` CLI outside an agent) and the orchestrator may call `
 `agents`, `read`, `map`, `wait`), so a worker cannot approve its own permission prompt. OpenCode workers get a
 prompt-free allow only for those read/messaging subcommands. When an agent can't work, the orchestrator is told a
 fixed category (no login / expired token / provider rejected), never the raw screen line (shown to you in the feed).
-Identity is a secret, not a name: every agent gets its own random `COBAN_TOKEN` (`COBAN_AGENT` is display only),
-and the user's CLI reads a token coban writes at start to `~/.coban/coban.token` (next to the socket, both `0600`,
-`~/.coban` is `0700`). A request with no or an unknown token is an unprivileged `anon` caller; inside an agent's
-environment the CLI never reads the user token, and `coban rule add/rm` refuses to run there (also offline). Agent
-names are plain (`[A-Za-z0-9._-]`, no `coban`/`anon`), and what an agent posts can't fake coban's own `[coban …]`
-framing. What stays out of reach: agents run as your OS user, so one that is allowed to run arbitrary shell commands
-(outside the prompt-free `coban …` allowlist) can still read `~/.coban/coban.token` or another process's
-environment. These checks stop prompt-injected or confused agents, not a deliberately hostile one with free shell.
+Identity is a secret, not a name: every agent gets its own random `COBAN_TOKEN` (`COBAN_AGENT` is display only).
+There is **no user secret** anywhere an agent could read it — no token file, no env var, no second socket (agents run
+as your OS user and can read `~/.coban` and find any socket; nothing in there grants rights). User rights exist only
+inside the coban window itself. A request on the socket without a valid agent token (another terminal of yours, or an
+agent that dropped its token) is `anon`: reading and messaging work, but `spawn`/`approve`/`key`/`kill`/`rule` pop up
+an **ONAY GEREKİYOR** box in the coban window showing the full request (every field, uncut; control and bidi
+characters escaped). Only your `y` there runs it (`n`/`esc` refuses; keys in the first 0.6 s are ignored; refused
+after 2 min). Agent tokens never get such a box: rule edits from any agent, even the orchestrator, are refused, and
+`coban rule add/rm` won't run inside an agent's environment (also not the offline config edit). Agent names are
+plain (`[A-Za-z0-9._-]`, no `coban`/`anon`); what an agent posts is normalized, stripped of invisible characters and
+quoted line by line, so it can't fake coban's `[coban …]` framing. Socket `0600`, `~/.coban` `0700` (that stops other
+OS users, not agents). Remaining risk: an agent allowed to run arbitrary shell commands (outside the prompt-free
+`coban …` allowlist) can read `~/.coban/history.jsonl`, other agents' environments (their tokens, e.g. the
+orchestrator's) and could ask you through the box — read it before pressing `y`. These checks stop prompt-injected or
+confused agents, not a deliberately hostile one with free shell.
 
 ## Known gaps
 

@@ -63,6 +63,7 @@ export function columnWidths(W: number, share: number, feedHidden: boolean) {
 const hhmm = (ts: number) => { const t = new Date(ts); return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
+const CONFIRM_GUARD_MS = 600;
 const FRAME_MS = 80;
 
 // ── per-account usage bars (cached; refreshed every 30 s, never in the render path) ──
@@ -213,6 +214,7 @@ export class Tui {
 
   constructor(hub: Hub) {
     this.hub = hub;
+    hub.confirmUI = true;   // anon socket requests for user rights now come here for a y/n
     this.chatShare = sanitizeShare(hub.cfg.chatWidth);
     this.feedHidden = hub.cfg.feedHidden === true;
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
@@ -324,6 +326,15 @@ export class Tui {
 
   // ── input ────────────────────────────────────────────────────
   input(d: string): void {
+    // A pending confirmation owns the keyboard: only y or n/esc, never passed on to an agent. Keys in its first
+    // CONFIRM_GUARD_MS are ignored, so a "y" typed into an agent just as it pops up can't approve it.
+    const cf = this.hub.confirms[0];
+    if (cf) {
+      if (Date.now() - cf.at < CONFIRM_GUARD_MS) return;
+      if (d === 'y' || d === 'Y') this.hub.resolveConfirm(cf.id, true);
+      else if (d === 'n' || d === 'N' || d === '\x1b' || d === '\x03') this.hub.resolveConfirm(cf.id, false);
+      return;
+    }
     if (d.includes('\x1b[<')) {
       d = d.replace(MOUSE_RE, (_, b, x, y, m) => { this.mouse(Number(b), Number(x) - 1, Number(y) - 1, m === 'M'); return ''; });
       if (!d) return;
@@ -851,6 +862,31 @@ export class Tui {
     return { c, x, y };
   }
 
+  // The pending user-rights request from outside (anon socket caller), every field in full, wrapped.
+  confirmBox(W: number, H: number): { c: Canvas; x: number; y: number } {
+    const cf = this.hub.confirms[0];
+    const w = clamp(W - 8, 30, 100);
+    const wrap = (l: string) => { const r: string[] = []; for (let i = 0; i < l.length || i === 0; i += w - 4) r.push(l.slice(i, i + w - 4)); return r; };
+    const body = [
+      'Agent olmayan bir istemci (başka bir terminal — ya da kimliğini',
+      'gizleyen bir agent) kullanıcı yetkisiyle şunu istiyor:', '',
+      ...cf.lines.flatMap(wrap),
+    ];
+    const max = Math.max(3, H - 6);
+    const shown = body.length > max ? [...body.slice(0, max - 1), '… (sığmadı: reddet ve coban log ile bak)'] : body;
+    const h = shown.length + 4;
+    const x = Math.floor((W - w) / 2), y = clamp(Math.floor((H - 1 - h) / 2), 0, Math.max(0, H - 1 - h));
+    const c = new Canvas(w, h);
+    const bs = '0;1;38;5;203', bg = ';48;5;234';
+    c.put(0, 0, '╭' + '─'.repeat(w - 2) + '╮', bs);
+    c.put(2, 0, ' ONAY GEREKİYOR ', bs);
+    for (let i = 1; i < h - 1; i++) { c.put(0, i, '│', bs); c.put(1, i, ' '.repeat(w - 2), `0${bg}`); c.put(w - 1, i, '│', bs); }
+    shown.forEach((l, i) => c.put(2, 1 + i, l, `0${bg}`));
+    c.put(2, h - 2, 'y onayla · n / esc reddet', `0;1;${GOLD}${bg}`);
+    c.put(0, h - 1, '╰' + '─'.repeat(w - 2) + '╯', bs);
+    return { c, x, y };
+  }
+
   // ── feed: who said what to whom, plus lifecycle events ───────
   feed(w: number, h: number): Canvas {
     const c = new Canvas(w, h);
@@ -1008,7 +1044,7 @@ export class Tui {
       if (focus) head.segs(0, 0, L.pw, [[' ▍', this.tint(focus, rgbOf(focus.profile.color) ?? GOLD_RGB, false)], ['SOHBET ', `1;${DIM}`], ...this.paneTitle(focus)], ';48;5;235', false);
       else head.segs(0, 0, L.pw, [[' ▍SOHBET', `1;${DIM}`]], ';48;5;235', false);
     }
-    const ov = this.mode === 'pick' ? this.picker(W, H) : undefined;
+    const ov = hub.confirms.length ? this.confirmBox(W, H) : this.mode === 'pick' ? this.picker(W, H) : undefined;
     if (!ov) this.pickBox = undefined;
     const bp = this.showBoard && !ov ? this.boardPanel(W, H, full ? 0 : L.p.G) : undefined;
     if (!bp) this.boardBox = undefined;
@@ -1131,7 +1167,8 @@ export class Tui {
     let left: string;
     if (this.showBoard) hub.markBoardRead('user'); // the open panel counts as read
     const unreadBoard = hub.boardUnread('user');
-    if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
+    if (hub.confirms.length) left = ' ! ONAY GEREKİYOR · y onayla · n/esc reddet ';
+    else if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
     else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
     else if (this.prefix) left = ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
     else left = ` ^b komut · ${hub.focus || '-'}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor (^b y/a/r${this.geo?.mode === 'stack' ? ', ^b i' : ''})` : ''}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;

@@ -35,6 +35,7 @@ export type Coban = {
   env: Record<string, string>;
   term: any;
   cli: (as: string, ...args: string[]) => Promise<string>;
+  confirming: <T>(work: Promise<T>, answer?: string) => Promise<T>;
   screen: () => string;
   write: (s: string) => void;
   bytes: () => number;
@@ -63,26 +64,42 @@ export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [f
   let exited = false;
   p.onExit(() => { exited = true; });
 
-  // The hub knows callers by token: '' runs as the user (token file), an agent id runs with that agent's own
-  // COBAN_TOKEN (fetched with the user-only agent_token RPC), as the CLI inside that agent would.
-  const tokenOf = async (id: string) => {
-    try { return (await rpc(sock, fs.readFileSync(sock.replace(/\.sock$/, '.token'), 'utf8').trim(), 'agent_token', { id })).token as string; }
-    catch { return ''; }
-  };
-  const cli = async (as: string, ...args: string[]) => {
-    const e = as ? { ...env, COBAN_AGENT: as, COBAN_TOKEN: await tokenOf(as) } : env;
-    return new Promise<string>((resolve) =>
-      execFile(BIN, args, { cwd: dir, encoding: 'utf8', env: e }, (err, so, se) => resolve(err ? `ERR ${se}` : so.trimEnd())));
-  };
   const screen = () => {
     const b = term.buffer.active;
     const lines: string[] = [];
     for (let y = 0; y < rows; y++) lines.push(b.getLine(y)?.translateToString(true).replace(/\s+$/, '') ?? '');
     return lines.join('\n');
   };
+  // There is no user secret: a request for user rights from outside an agent waits for "y" in the coban window.
+  // `confirming(work)` plays the human: while `work` runs, it answers every confirmation box that shows up.
+  const confirming = async <T>(work: Promise<T>, answer = 'y'): Promise<T> => {
+    let done = false;
+    const r = work.finally(() => { done = true; });
+    (async () => {
+      while (!done) {
+        if (screen().includes('ONAY GEREKİYOR')) { await sleep(700); if (!done && screen().includes('ONAY GEREKİYOR')) p.write(answer); }
+        await sleep(100);
+      }
+    })();
+    return r;
+  };
+  // '' runs as the human; an agent id runs with that agent's own COBAN_TOKEN (agent_token RPC, confirmed once).
+  const tokens = new Map<string, string>();
+  const tokenOf = async (id: string) => {
+    if (!tokens.has(id)) {
+      try { tokens.set(id, (await confirming(rpc(sock, undefined, 'agent_token', { id }))).token); } catch { return ''; }
+    }
+    return tokens.get(id)!;
+  };
+  const cli = async (as: string, ...args: string[]) => {
+    if (args[0] === 'kill') tokens.delete(args[1]);
+    const e = as ? { ...env, COBAN_AGENT: as, COBAN_TOKEN: await tokenOf(as) } : env;
+    return confirming(new Promise<string>((resolve) =>
+      execFile(BIN, args, { cwd: dir, encoding: 'utf8', env: e }, (err, so, se) => resolve(err ? `ERR ${se}` : so.trimEnd()))));
+  };
   await until(async () => !(await cli('', 'agents')).startsWith('ERR'));
   return {
-    dir, sock, env, term, cli, screen, write: (s) => p.write(s), bytes: () => bytes,
+    dir, sock, env, term, cli, confirming, screen, write: (s) => p.write(s), bytes: () => bytes,
     stop: async () => {
       if (!exited) { p.write('\x02q'); await until(() => exited, 3000).catch(() => p.kill()); }
       fs.rmSync(dir, { recursive: true, force: true });

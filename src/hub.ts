@@ -5,7 +5,7 @@ import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { notify, type Notifier } from './notify.ts';
 import { Agent, ERROR_LABEL, errorKind, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
-import { BIN_DIR, checkName, DEFAULT_SOCK, MAX_MATCH_TEXT, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, TOKEN_PATH, type ApprovalRule, type Config, type Profile } from './config.ts';
+import { BIN_DIR, checkName, DEFAULT_SOCK, MAX_MATCH_TEXT, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, type ApprovalRule, type Config, type Profile } from './config.ts';
 import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
@@ -29,6 +29,32 @@ export const WORKER_COMMANDS = ['post', 'send', 'inbox', 'board', 'agents', 'rea
 const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
 // RPC methods only the human may call (user token): permissions and other agents' credentials.
 const USER_ONLY = new Set(['rule_add', 'rule_rm', 'agent_token']);
+// Agent-authored message text, made safe to paste into another agent: NFKC + no invisible format characters (so
+// "[\u200bcoban" can't slip past), "[coban" defused, and every line after the first quoted with "  » " so nothing in
+// it starts a line of its own (coban's framing "[coban mesajı · from → to]" always starts a line).
+export function agentText(text: string): string {
+  const t = text.normalize('NFKC').replace(/[\p{Cf}\u034f\u115f\u1160\u3164\uffa0]/gu, '').replace(/\[(\s*coban)/gi, '($1');
+  return t.split(/\r\n|\r|\n|\u2028|\u2029|\u0085/).map((l, i) => (i === 0 ? l : '  » ' + l)).join('\n');
+}
+
+export type Confirm = { id: number; method: string; lines: string[]; at: number; resolve: (ok: boolean) => void };
+
+// What the human is asked to confirm: every field that matters, in full (the request may come from a hostile process;
+// a cut-off verify command or regex would hide exactly the dangerous part). Control characters are made visible.
+export function describeRequest(method: string, p: any): string[] {
+  // control and invisible/bidi format characters (U+202E could reorder what the human reads) are shown as \u escapes
+  const v = (x: unknown) => JSON.stringify(x ?? null).replace(/[\u0000-\u001f\u007f-\u009f\p{Cf}\u2028\u2029]/gu, (ch) => `\\u${ch.charCodeAt(0).toString(16).padStart(4, '0')}`);
+  const out = [`istek: ${method}`];
+  const fields: Record<string, string[]> = {
+    spawn: ['profile', 'name', 'cwd', 'after', 'worktree', 'verify', 'task'],
+    approve: ['id', 'choice'], key: ['id', 'keys'], kill: ['id', 'removeWorktree'],
+    rule_add: ['match', 'cwd', 'profile'], rule_rm: ['n'], agent_token: ['id'],
+  };
+  for (const k of fields[method] ?? Object.keys(p ?? {})) if (p?.[k] !== undefined) out.push(`${k}: ${v(p[k])}`);
+  if (method === 'agent_token') out.push('(bu agent adına komut çalıştırma yetkisi verir)');
+  return out;
+}
+
 // Ids an agent can never get: they name the human, the board, coban itself and unauthenticated callers.
 const RESERVED_IDS = new Set(['user', 'all', 'coban', 'anon']);
 const MAX_LINE = 1 << 20;   // one RPC request; a client that sends more without a newline is cut off
@@ -153,9 +179,14 @@ export class Hub extends EventEmitter {
   private msgSeq = 0;
   private server?: net.Server;
   // Caller identity comes from a secret, never from a name the caller states: every agent gets its own random token
-  // (env COBAN_TOKEN, see spawn), the human's CLI reads userToken from TOKEN_PATH (0600, written by listen()).
+  // (env COBAN_TOKEN, see spawn). There is NO user secret anywhere an agent could read it (file, env, socket path):
+  // 'user' exists only in-process (the TUI calls the hub directly). A socket caller without an agent token is 'anon';
+  // its privileged requests wait for the human to confirm them in the TUI (`confirms`), or fail when no TUI is attached.
   private tokens = new Map<string, string>();      // token → agent id
-  private userToken = '';
+  confirmUI = false;                               // set by the TUI: it shows `confirms` and answers them
+  confirmMs = 120_000;                             // an unanswered confirmation is refused after this
+  confirms: Confirm[] = [];                        // at most one at a time
+  private confirmSeq = 0;
 
   constructor(cfg: Config) {
     super();
@@ -379,7 +410,7 @@ export class Hub extends EventEmitter {
   post(from: string, to: string, text: string): Msg {
     // An agent's text must not be able to fake coban's own framing ("[coban mesajı · user → …]", "[coban] …") and pass
     // itself off as the user or coban once it is pasted into another agent's terminal.
-    if (from !== 'user' && from !== 'coban') text = text.replace(/\[(\s*coban)/gi, '($1');
+    if (from !== 'user' && from !== 'coban') text = agentText(text);
     const m: Msg = { id: ++this.msgSeq, from, to, text, ts: Date.now(), delivered: false };
     this.log.push(m);
     if (this.log.length > 500) this.log.shift();
@@ -655,15 +686,39 @@ export class Hub extends EventEmitter {
   // Workers and anon only read and message.
   private privileged(caller: string) { return caller === 'user' || (!!this.orchestratorId && caller === this.orchestratorId); }
 
-  // Who is calling: the user token → 'user', an agent's token → its id, anything else (none, stale, guessed) → 'anon',
-  // an unprivileged caller that is no agent at all.
+  // Who is calling: an agent's token → its id; anything else (none, stale, guessed, a stated name) → 'anon'.
+  // Never 'user': that one is reserved for in-process calls from the TUI.
   callerFor(token: unknown): string {
     if (typeof token !== 'string' || !token) return 'anon';
-    if (this.userToken && token === this.userToken) return 'user';
     return this.tokens.get(token) ?? 'anon';
   }
 
+  // Ask the human in the TUI whether an anon socket request may run with user rights. Resolves false on refusal/timeout.
+  requestConfirm(method: string, p: any): Promise<boolean> {
+    if (this.confirms.length) return Promise.reject(new Error(`${method}: arayüzde zaten onay bekleyen bir istek var`));
+    return new Promise((resolve) => {
+      const c: Confirm = { id: ++this.confirmSeq, method, lines: describeRequest(method, p), at: Date.now(), resolve: () => {} };
+      const timer = setTimeout(() => this.resolveConfirm(c.id, false), this.confirmMs);
+      c.resolve = (ok) => { clearTimeout(timer); resolve(ok); };
+      this.confirms.push(c);
+      this.emit('change');
+    });
+  }
+
+  resolveConfirm(id: number, ok: boolean) {
+    const c = this.confirms.find((x) => x.id === id);
+    if (!c) return;
+    this.confirms = this.confirms.filter((x) => x !== c);
+    c.resolve(ok);
+    this.emit('change');
+  }
+
   async handle(caller: string, method: string, p: any): Promise<unknown> {
+    // Outside CLI (or an agent that dropped its token): user rights only with the human's yes in the TUI.
+    if (caller === 'anon' && (USER_ONLY.has(method) || PRIVILEGED.has(method)) && this.confirmUI) {
+      if (!(await this.requestConfirm(method, p))) throw new Error(`${method}: kullanıcı arayüzde onaylamadı`);
+      caller = 'user';
+    }
     if (USER_ONLY.has(method) && caller !== 'user') throw new Error(`${method} yalnız kullanıcıdan (agent içinden değil)`);
     if (PRIVILEGED.has(method) && !this.privileged(caller)) throw new Error(`${method} yalnız kullanıcıdan veya orkestratörden (${caller} işçi)`);
     switch (method) {
@@ -746,9 +801,7 @@ export class Hub extends EventEmitter {
     fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
     // Remove a stale socket, but never some other file COBAN_SOCK happens to point at.
     try { if (fs.lstatSync(SOCK).isSocket()) fs.unlinkSync(SOCK); } catch {}
-    this.userToken = newToken();
-    try { fs.unlinkSync(TOKEN_PATH); } catch {}
-    fs.writeFileSync(TOKEN_PATH, this.userToken + '\n', { mode: 0o600, flag: 'wx' });   // wx: never through a planted symlink
+    try { fs.unlinkSync(SOCK.replace(/\.sock$/, '') + '.token'); } catch {}   // user token file of an earlier version
     this.server = net.createServer((sock) => {
       let buf = '';
       sock.on('data', async (d) => {
@@ -774,6 +827,6 @@ export class Hub extends EventEmitter {
     for (const a of this.agents.values()) a.kill();
     this.server?.close();
     try { fs.unlinkSync(SOCK); } catch {}
-    try { if (fs.readFileSync(TOKEN_PATH, 'utf8').trim() === this.userToken) fs.unlinkSync(TOKEN_PATH); } catch {}
+    for (const c of [...this.confirms]) this.resolveConfirm(c.id, false);
   }
 }

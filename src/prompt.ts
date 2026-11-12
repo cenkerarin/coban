@@ -71,23 +71,31 @@ export function parsePrompt(screen: string): Prompt | null {
   let qi = a - 1;
   while (qi >= 0 && !L[qi].trim()) qi--;
   const question = (L[qi] ?? '').trim();
-  // Blank and pure-dash lines are layout and carry nothing; every other line goes into `text`.
+  // Frame lines (the solid top border, the dashed body separators) start at column 0; the dialog's content is indented.
+  // So a separator-looking line inside a command (" ────") is content, never the border: it can't cut the lines above
+  // it out of `text`. Every content line goes into `text`; a blank or unindented line inside the frame (unknown
+  // layout) makes the prompt incomplete rather than silently dropping something.
   const ctx: string[] = [];
-  let top = false, capped = false;
+  let top = false, capped = false, odd = false;
   for (let i = qi - 1; i >= 0; i--) {
-    if (SOLID.test(L[i])) { top = true; break; }
-    if (DASHED.test(L[i]) || !L[i].trim()) continue;
+    const l = L[i];
+    if (FRAME_SOLID.test(l)) { top = true; break; }
+    if (FRAME_DASHED.test(l)) continue;
+    if (!l.trim()) { odd = true; continue; }
+    if (!/^\s/.test(l)) odd = true;
     if (ctx.length >= MAX_CTX) { capped = true; break; }
-    ctx.unshift(L[i].trim());
+    ctx.unshift(l.trim());
   }
   const lines = ctx.filter((l) => !/^Tip:/i.test(l));   // display only; `text` keeps them
   const title = lines[0] ?? question;
   const body = lines.slice(1, 5);
   const text = ctx.join(' · ');
-  const complete = top && !capped && ctx.length > 0 && !ctx.some((l) => l.includes('·'));
+  const complete = top && !capped && !odd && ctx.length > 0 && !ctx.some((l) => l.includes('·'));
   return { title, body, question, options, kind: 'menu', text, complete, key: `${title}|${question}|${options.map((o) => o.label).join('|')}|${text}` };
 }
 const MAX_CTX = 14;
+const FRAME_SOLID = /^[─━═]{10,}\s*$/;
+const FRAME_DASHED = /^[╌┄┈╍]{10,}\s*$/;
 
 function parseYN(L: string[]): Prompt | null {
   // only the question being answered right now: among the last two non-empty lines
