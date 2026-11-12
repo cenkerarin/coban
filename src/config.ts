@@ -20,6 +20,7 @@ export type Config = {
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
   feedHidden?: boolean;          // feed column hidden (^b l); saved so the panel layout survives restarts
   rules?: ApprovalRule[];        // standing approvals, see `coban rule`; none by default
+  verifyTries?: number;          // spawn --verify: how many failed runs are sent back to the worker before giving up (default 3)
   profiles: Profile[];
 };
 

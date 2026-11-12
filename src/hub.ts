@@ -8,6 +8,7 @@ import { BIN_DIR, DEFAULT_SOCK, ruleMatches, ruleRegex, saveRules, SOCK, STATE_D
 import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
+import { addWorktree, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
@@ -37,6 +38,7 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban map [alt-dizin]                repo haritası: dosya (satır sayısı) ve sembol:satır listesi — repoyu tanımak için BUNU kullan
   coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
                                        --ctx "dosya#sembol1,sembol2" | "dosya:10-80" | "dosya": o kodu satır numaralı olarak görevin içine ekler
+                                       --after id1,id2: onlar bitince başlar (kuyruk) · --worktree[=dal]: ayrı git worktree'de çalışır · --verify "<komut>": işçi durunca coban komutu koşar, başarısızsa çıktıyı işçiye geri yollar
   coban send <id> "<mesaj>" [--ctx yer]...   meşgulse boşalınca iletilir
   coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
   coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
@@ -47,7 +49,7 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban inbox                          sana gelen mesajlar + ortak kutudaki yeni notlar (yalnızca okumadıkların)
   coban board [--limit 20]             ortak kutunun son notları (yeni katılan biri için)
   coban usage                          hesap başına kullanım: 5 saatlik %, 7 günlük token, reset; en az harcayan başta
-  coban kill <id>  ·  coban post user "<mesaj>"
+  coban kill <id> [--rm-worktree]  ·  coban post user "<mesaj>"
 
 Profiller: ${profiles.map((p) => `${p.id} (${p.title}${p.model ? ', ' + p.model : ''})`).join(', ')}.
 
@@ -127,6 +129,9 @@ export class Hub extends EventEmitter {
   boardSeen = new Map<string, number>();           // agent → last board msg id it has read
   seen = new Map<string, Map<string, number>>(); // caller → agent → settledSeq already reported
   size = { cols: 100, rows: 30 };
+  jobs = new Map<string, Job>();                   // worker → worktree / verify gate (spawn --worktree / --verify)
+  queue: Queued[] = [];                            // spawns waiting for other agents (spawn --after)
+  worked = new Set<string>();                      // agents that have been 'working' at least once
   private msgSeq = 0;
   private server?: net.Server;
 
@@ -134,6 +139,7 @@ export class Hub extends EventEmitter {
     super();
     this.cfg = cfg;
     setInterval(() => { for (const a of this.agents.values()) a.tick(); this.autoApprove(); }, 400).unref();
+    this.on('change', () => this.drainQueue());
   }
 
   profile(id: string): Profile {
@@ -145,11 +151,12 @@ export class Hub extends EventEmitter {
   get orchestratorId() { return this.order.find((id) => this.agents.get(id)?.role === 'orchestrator') ?? ''; }
 
   private newId(base: string) {
-    if (!this.agents.has(base) && base !== 'user' && base !== 'all') return base;
-    for (let n = 2; ; n++) if (!this.agents.has(`${base}-${n}`)) return `${base}-${n}`;
+    const taken = (x: string) => this.agents.has(x) || this.queue.some((j) => j.id === x);
+    if (!taken(base) && base !== 'user' && base !== 'all') return base;
+    for (let n = 2; ; n++) if (!taken(`${base}-${n}`)) return `${base}-${n}`;
   }
 
-  spawn(o: { profile: string; role: Role; task?: string; name?: string; cwd?: string }): Agent {
+  spawn(o: { profile: string; role: Role; task?: string; name?: string; cwd?: string; worktree?: string | true; verify?: string }): Agent {
     const p = this.profile(o.profile);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
     const launch = launchFor(p);
@@ -178,7 +185,9 @@ export class Hub extends EventEmitter {
     };
     delete env.CLAUDECODE; // don't let a parent Claude session leak into children
 
-    const cwd = o.cwd || process.cwd();
+    let cwd = o.cwd || process.cwd();
+    const wt = o.worktree ? addWorktree(cwd, id, typeof o.worktree === 'string' ? o.worktree : undefined) : undefined;
+    if (wt) cwd = wt.dir;
     if (o.role === 'worker') ensureReportsDir(cwd);
     const a = new Agent({ id, profile: p, role: o.role, task: o.task ?? '', cwd, cmd: parts.join(' '), env, ...this.size });
     a.model = model ?? '';
@@ -213,12 +222,15 @@ export class Hub extends EventEmitter {
           } catch {}
         });
       }
+      if (s === 'working') this.worked.add(a.id);
       if (SETTLED.includes(s)) {
         if (this.focus !== a.id) a.unread = true;
         if (s === 'idle') this.flushInbox(a);
+        if (s === 'idle' || s === 'exited') this.verify(a);
       }
       this.emit('change');
     });
+    if (wt || o.verify) this.jobs.set(id, { worktree: wt?.dir, branch: wt?.branch, verify: o.verify, verifyTries: 0 });
     this.agents.set(id, a);
     this.order.push(id);
     if (!this.focus) this.focus = id;
@@ -226,13 +238,92 @@ export class Hub extends EventEmitter {
     return a;
   }
 
-  kill(id: string) {
+  // removeWorktree: also delete the worker's git worktree (kept when it has uncommitted changes; the branch always stays).
+  kill(id: string, opts: { removeWorktree?: boolean } = {}): string | undefined {
+    if (!this.agents.has(id) && this.queue.some((j) => j.id === id)) {
+      this.queue = this.queue.filter((j) => j.id !== id);
+      this.emit('change');
+      return;
+    }
     const a = this.get(id);
     a.kill();
+    const job = this.jobs.get(id);
+    this.jobs.delete(id);
+    this.worked.delete(id);
+    let note: string | undefined;
+    if (opts.removeWorktree && job?.worktree) {
+      try { removeWorktree(job.worktree); note = `worktree silindi: ${job.worktree} (dal ${job.branch} duruyor)`; }
+      catch (e: any) { note = `worktree silinemedi (${job.worktree}): ${e.message}`; }
+    }
     this.agents.delete(id);
     this.order = this.order.filter((x) => x !== id);
     if (this.focus === id) this.focus = this.order[0] ?? '';
     this.emit('change');
+    return note;
+  }
+
+  // ── task queue: `spawn --after a,b` starts once every dependency is done ──
+  // Done = settled idle/exited after having worked (and its verify gate passed or gave up), or no longer exists.
+  enqueue(o: { profile: string; task?: string; name?: string; cwd?: string; worktree?: string | true; verify?: string; after: string[] }): string {
+    const p = this.profile(o.profile);
+    for (const d of o.after) if (!this.agents.has(d) && !this.queue.some((j) => j.id === d)) throw new Error(`agent yok: ${d}`);
+    const id = this.newId(o.name || p.id);
+    this.queue.push({ id, after: o.after, spawn: { profile: o.profile, task: o.task, cwd: o.cwd, worktree: o.worktree, verify: o.verify } });
+    queueMicrotask(() => this.emit('change'));
+    return id;
+  }
+
+  depDone(id: string): boolean {
+    if (this.queue.some((j) => j.id === id)) return false;
+    const a = this.agents.get(id);
+    if (!a) return true;
+    if (!(a.status === 'exited' || (a.status === 'idle' && this.worked.has(id)))) return false;
+    const st = this.jobs.get(id)?.verify ? this.jobs.get(id)!.verifyState : 'pass';
+    return st === 'pass' || st === 'gaveup';
+  }
+
+  private drainQueue() {
+    for (const j of this.queue) {
+      if (!j.after.every((d) => this.depDone(d))) continue;
+      this.queue = this.queue.filter((x) => x !== j);
+      const orch = this.orchestratorId;
+      try {
+        this.spawn({ ...j.spawn, role: 'worker', name: j.id });
+        this.post('coban', orch || 'user', `${j.id} kuyruktan başlatıldı (${j.after.join(', ')} bitti)`);
+      } catch (e: any) {
+        this.post('coban', orch || 'user', `${j.id} kuyruktan başlatılamadı: ${e?.message ?? e}`);
+      }
+      return; // spawn/post emitted 'change' and drained the rest
+    }
+  }
+
+  // ── verify gate: run the worker's `--verify` command when it settles; on failure send it the output's tail ──
+  private verify(a: Agent) {
+    const job = this.jobs.get(a.id);
+    if (!job?.verify || job.verifyState === 'running' || a.role !== 'worker') return;
+    if (a.status === 'idle' && (!this.worked.has(a.id) || a.inbox.some((m) => !m.delivered))) return;
+    if (job.verifyState === 'gaveup' || (job.verifyState === 'pass' && a.status === 'exited')) return;
+    if (job.verifyState === 'pass') job.verifyTries = 0; // worked again after passing: a fresh round
+    const seq = a.settledSeq, max = this.cfg.verifyTries ?? 3;
+    job.verifyState = 'running';
+    job.verifyTries++;
+    const tell = (text: string) => { try { this.post('coban', this.orchestratorId || 'user', text); } catch {} };
+    runVerify(job.verify, a.cwd).then(({ code, out }) => {
+      if (this.jobs.get(a.id) !== job) return; // killed meanwhile
+      if (a.settledSeq !== seq && a.status !== 'exited') { job.verifyState = undefined; job.verifyTries--; this.verify(a); return; } // it moved on: check again later
+      if (code === 0) {
+        job.verifyState = 'pass';
+        tell(`${a.id} doğrulama geçti: ${job.verify}`);
+      } else if (a.status === 'exited' || job.verifyTries >= max) {
+        job.verifyState = 'gaveup';
+        tell(`${a.id} doğrulama ${job.verifyTries}. denemede de başarısız (çıkış ${code}): ${job.verify}${a.status === 'exited' ? ' — işçi kapanmış' : ''}\n${tail(out, 15, 1200)}`);
+      } else {
+        job.verifyState = 'fail';
+        this.post('coban', a.id, `DOĞRULAMA BAŞARISIZ (deneme ${job.verifyTries}/${max}): \`${job.verify}\` çıkış kodu ${code}. Çıktının sonu:\n${tail(out)}\n` +
+          'Sorunu düzelt; bitince coban doğrulamayı yeniden çalıştırır.');
+      }
+      this.emit('change');
+    });
   }
 
   get(id: string): Agent {
@@ -426,6 +517,8 @@ export class Hub extends EventEmitter {
       return null;
     }
     const pending = a.inbox.filter((m) => !m.delivered);
+    const job = this.jobs.get(a.id);
+    if (job) this.jobs.set(b.id, { ...job, verifyState: undefined }); // worktree and verify gate follow the task
     try { this.kill(a.id); } catch {}
     for (const m of pending) { m.to = b.id; b.inbox.push(m); } // undelivered mail follows the task
     const note = `${a.id} ${crash ? 'çökmesi nedeniyle' : 'limitten'} ${target.profileId} hesabına devredildi → ${b.id}`;
@@ -511,6 +604,7 @@ export class Hub extends EventEmitter {
         id, profile: a.profile.id, model: a.model, role: a.role, status: a.status,
         ...(a.status === 'error' ? { error: a.error } : {}),
         ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
+        ...(this.jobs.get(id)?.verify ? { verify: this.jobs.get(id)!.verifyState ?? 'pending' } : {}),
         task: a.task.replace(/\s+/g, ' ').slice(0, 60),
         unreadMessages: a.inbox.filter((m) => !m.delivered).length,
         boardUnread: this.boardUnread(id),
@@ -523,12 +617,17 @@ export class Hub extends EventEmitter {
     switch (method) {
       case 'agents': {
         const st = this.stats();
-        return { agents: this.list().map((a) => ({ ...a, ...(st.has(a.id) ? { usage: st.get(a.id) } : {}) })), profiles: this.cfg.profiles.map(({ id, title, model }) => ({ id, title, model })) };
+        return {
+          agents: this.list().map((a) => ({ ...a, ...(st.has(a.id) ? { usage: st.get(a.id) } : {}) })), profiles: this.cfg.profiles.map(({ id, title, model }) => ({ id, title, model })),
+          queued: this.queue.map((j) => ({ id: j.id, profile: j.spawn.profile, after: j.after, task: (j.spawn.task ?? '').replace(/\s+/g, ' ').slice(0, 60) })),
+        };
       }
       case 'history': return { history: readHistory(p.limit ?? 50) };
       case 'spawn': {
-        const a = this.spawn({ profile: p.profile, role: 'worker', task: p.task, name: p.name, cwd: p.cwd });
-        return { id: a.id };
+        const o = { profile: p.profile, task: p.task, name: p.name, cwd: p.cwd, worktree: p.worktree, verify: p.verify };
+        if (p.after?.length) return { id: this.enqueue({ ...o, after: p.after }), queued: true };
+        const a = this.spawn({ ...o, role: 'worker' });
+        return { id: a.id, ...(this.jobs.get(a.id)?.worktree ? { worktree: this.jobs.get(a.id)!.worktree, branch: this.jobs.get(a.id)!.branch } : {}) };
       }
       case 'send':
       case 'post': return { ok: true, id: this.post(caller, p.to, p.text).id };
@@ -575,7 +674,7 @@ export class Hub extends EventEmitter {
         saveRules(rules);
         return { removed: gone };
       }
-      case 'kill': this.kill(p.id); return { ok: true };
+      case 'kill': { const note = this.kill(p.id, { removeWorktree: !!p.removeWorktree }); return { ok: true, ...(note ? { note } : {}) }; }
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);
     }

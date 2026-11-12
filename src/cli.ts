@@ -15,6 +15,9 @@ Agent'ların içinden (veya başka bir terminalden):
   coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
                                       --ctx: "dosya:10-80" | "dosya#sembol1,sembol2" | "dosya"
                                       ilgili kodu satır numaralı olarak görevin içine ekler (send/post'ta da var)
+        [--after id1,id2]             kuyruğa al: bu agent'lar bitince (idle/exited, doğrulaması geçmiş) başlar
+        [--worktree[=dal]]            ayrı git worktree'si (<repo>-<id>, dal coban/<id>) açıp işçiyi orada başlatır
+        [--verify "<komut>"]          işçi durunca komutu cwd'sinde koşar; başarısızsa çıktının sonunu ona geri gönderir
   coban map [alt-dizin]               repo haritası: dosyalar, satır sayıları, semboller:satır
   coban send <id> "<mesaj>"           (post ile aynı)
   coban post <id|user|all> "<mesaj>"  all = ortak kutu (herkes görür)
@@ -27,7 +30,7 @@ Agent'ların içinden (veya başka bir terminalden):
                                       (metin: coban approvals'taki gövde satırları " · " ile birleşik; varsayılan kural yok)
   coban rule list | coban rule rm <no>
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
-  coban kill <id>
+  coban kill <id> [--rm-worktree]     --rm-worktree: işçinin worktree'sini de sil (değişiklik varsa silmez; dal kalır)
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
   coban board [--limit n]             ortak kutunun son notları
   coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
@@ -54,7 +57,7 @@ function call(method: string, params: object): Promise<any> {
   });
 }
 
-const BOOL_FLAGS = ['scrollback', 'raw', 'json'];
+const BOOL_FLAGS = ['scrollback', 'raw', 'json', 'worktree', 'rm-worktree'];
 
 function parse(argv: string[]) {
   const pos: string[] = [];
@@ -117,18 +120,24 @@ async function main() {
   const usageTag = (u: any) => `tok=${fmtTokens(u.tokens)}` + (u.remainPct === undefined ? '' : ` kalan=%${Math.round(u.remainPct * 100)}${u.etaMs === null ? '' : ' ' + fmtEta(u.etaMs)}`);
   const agentLine = (a: any) =>
     [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : a.role === 'manual' ? 'manuel' : '', a.status,
-      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.usage ? usageTag(a.usage) : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
+      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.usage ? usageTag(a.usage) : '', a.verify ? `doğrulama:${a.verify}` : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
       .filter(Boolean).join('  ');
 
   switch (cmd) {
     case 'agents': {
       const r = await call('agents', {});
-      return print(r, () => [...r.agents.map(agentLine), 'profiller: ' + r.profiles.map((p: any) => `${p.id}${p.model ? '/' + short(p.model) : ''}`).join(' ')].join('\n'));
+      const queuedLine = (j: any) => [j.id, j.profile, `kuyrukta (bekliyor: ${j.after.join(', ')})`, j.task ? `"${j.task}"` : ''].filter(Boolean).join('  ');
+      return print(r, () => [...r.agents.map(agentLine), ...(r.queued ?? []).map(queuedLine), 'profiller: ' + r.profiles.map((p: any) => `${p.id}${p.model ? '/' + short(p.model) : ''}`).join(' ')].join('\n'));
     }
     case 'spawn': {
       const cwd = typeof flags.cwd === 'string' ? flags.cwd : process.cwd();
-      const r = await call('spawn', { profile: pos[0], task: pos.slice(1).join(' ') + snippets(ctx, cwd), name: flags.name, cwd: flags.cwd });
-      return print(r, () => `açıldı: ${r.id}`);
+      const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
+      const after = str(flags.after)?.split(',').map((x) => x.trim()).filter(Boolean);
+      const r = await call('spawn', {
+        profile: pos[0], task: pos.slice(1).join(' ') + snippets(ctx, cwd), name: flags.name, cwd: flags.cwd,
+        after, worktree: flags.worktree, verify: str(flags.verify),
+      });
+      return print(r, () => r.queued ? `kuyrukta: ${r.id} (bekliyor: ${after!.join(', ')})` : `açıldı: ${r.id}${r.worktree ? `  worktree=${r.worktree} dal=${r.branch}` : ''}`);
     }
     case 'send': case 'post': {
       const r = await call('post', { to: pos[0], text: pos.slice(1).join(' ') + snippets(ctx, process.cwd()) });
@@ -202,7 +211,10 @@ async function main() {
       }
       console.error('kullanım: coban rule add|list|rm'); process.exit(1);
     }
-    case 'kill': { const r = await call('kill', { id: pos[0] }); return print(r, () => `kapatıldı: ${pos[0]}`); }
+    case 'kill': {
+      const r = await call('kill', { id: pos[0], removeWorktree: !!flags['rm-worktree'] });
+      return print(r, () => `kapatıldı: ${pos[0]}${r.note ? ' · ' + r.note : ''}`);
+    }
     case 'inbox': {
       const r = await call('inbox', {});
       const lines = [...r.messages.map((m: any) => `✉ ${m.from}: ${m.text}`), ...r.board.map((m: any) => `[ortak] ${m.from}: ${m.text}`)];

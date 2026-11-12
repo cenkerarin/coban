@@ -183,6 +183,27 @@ so coban keeps running the unmodified Claude Code with your own login.
 - Agents opened by hand show as `manuel`; the orchestrator is told to use idle ones before spawning new workers, and
   coban prepends the worker brief to the first message they get.
 
+## Queues, worktrees and verify gates
+
+Three `coban spawn` flags let the orchestrator hand off sequencing, isolation and checking to coban itself:
+
+- **`--after id1,id2`** queues the spawn. It starts once every listed agent is done: idle or exited after having
+  worked, with its verify gate passed (or given up), or killed. `coban agents` lists queued spawns as
+  `kuyrukta (bekliyor: …)`; `coban kill <id>` cancels one. Dependencies may themselves be queued (chains).
+- **`--worktree[=branch]`** creates a git worktree next to the repo (`<repo>-<id>`, branch `coban/<id>` unless
+  named; an existing branch is checked out) and starts the worker there, so two workers can edit the same files.
+  `coban kill <id> --rm-worktree` removes it afterwards — only when it has no uncommitted changes; the branch is
+  always kept.
+- **`--verify "<cmd>"`** runs `cmd` with `sh` in the worker's directory each time it settles after working. On
+  failure the exit code and the output's last 40 lines are sent back to the worker to fix; after `verifyTries`
+  failures (config, default 3) or if the worker has exited, the orchestrator is told instead. A pass is reported to
+  the orchestrator, and `coban agents` shows `doğrulama:<state>`.
+
+```sh
+coban spawn h1 "HEDEF: …" --name api --worktree --verify "npx tsc --noEmit && npm test"
+coban spawn h2 "HEDEF: docs for the new API" --after api
+```
+
 ## Keeping context small
 
 Each request an agent makes re-reads its whole context (Claude Code alone is ~45k tokens before any work), so coban
