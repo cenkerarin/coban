@@ -18,8 +18,15 @@ export type Config = {
   orchestratorModel?: string;    // overrides the profile's model when it runs as orchestrator
   notify?: boolean;              // macOS notification when a worker waits for permission or hits a limit (default true)
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
+  feedHidden?: boolean;          // feed column hidden (^b l); saved so the panel layout survives restarts
+  rules?: ApprovalRule[];        // standing approvals, see `coban rule`; none by default
   profiles: Profile[];
 };
+
+// Standing approval: a permission prompt is answered "yes" automatically when `match` (a regex, anchored: it must
+// match the WHOLE prompt text as `coban approvals` shows it, body lines joined by " · ") fits and, if given,
+// the agent runs in `cwd` (or below it) and uses `profile`.
+export type ApprovalRule = { match: string; cwd?: string; profile?: string };
 
 export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
 export const BIN_DIR = path.join(ROOT, 'bin');
@@ -53,10 +60,32 @@ export function nextAccount(cfg: Config): { profile: Profile; dir: string } {
   return { profile: claude(n, SONNET, COLORS[(n - 1) % COLORS.length]), dir: path.join(os.homedir(), `.claude-hesap${n}`) };
 }
 
-export function saveChatWidth(share: number) {
+export function saveLayout(patch: Pick<Config, 'chatWidth' | 'feedHidden'>) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
-  raw.chatWidth = share;
+  Object.assign(raw, patch);
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+}
+export const saveChatWidth = (share: number) => saveLayout({ chatWidth: share });
+
+export function saveRules(rules: ApprovalRule[]) {
+  const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
+  raw.rules = rules;
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+}
+
+// Anchored on purpose: a rule for `rm -rf build` must never fire for `rm -rf build /`.
+export function ruleRegex(match: string): RegExp {
+  if (!match.trim()) throw new Error('boş regex olmaz');
+  return new RegExp(`^(?:${match})$`);
+}
+
+export function ruleMatches(r: ApprovalRule, text: string, cwd: string, profile: string): boolean {
+  if (r.profile && r.profile !== profile) return false;
+  if (r.cwd) {
+    const d = path.resolve(expand(r.cwd));
+    if (cwd !== d && !cwd.startsWith(d + path.sep)) return false;
+  }
+  try { return ruleRegex(r.match).test(text); } catch { return false; }
 }
 
 export function appendProfile(p: Profile) {
