@@ -18,7 +18,7 @@ test('approvals: list, answer from the CLI and from the panel', async () => {
   await until(blocked('m1')); await until(blocked('m2')); await until(blocked('q1'));
 
   const list = await c.cli('orkestra', 'approvals');
-  assert.match(list, /^m1 {2}fake {2}Bash command: Remove the build folder · rm -rf build$/m);
+  assert.match(list, /^m1 {2}fake {2}Bash command · Remove the build folder · rm -rf build$/m);
   assert.match(list, /\? Do you want to proceed\? {2}1\) Yes {2}2\) Yes, and don't ask again for rm commands {2}3\) No/);
   assert.match(list, /^q1 .*\n {2}\? Do you want to proceed\? \(y\/n\)$/m);
 

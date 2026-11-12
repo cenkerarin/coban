@@ -22,7 +22,10 @@ export type Prompt = {
   question: string;     // e.g. "Do you want to proceed?"
   options: PromptOption[];
   kind: 'menu' | 'yn';  // arrow-key menu, or a plain (y/n) question
-  key: string;          // identity, so an answer meant for one prompt never lands on the next
+  key: string;          // identity, so an answer meant for one prompt never lands on the next (covers `text` too)
+  text: string;         // what approval rules match: title and EVERY content line of the dialog (Tip: lines too), " · "
+  complete: boolean;    // `text` is provably the whole dialog: its top separator is on screen, no line limit was hit and
+                        // no line contains " · " itself (else line boundaries would be ambiguous). Rules need this.
 };
 export type Choice = 'yes' | 'always' | 'no';
 
@@ -68,17 +71,23 @@ export function parsePrompt(screen: string): Prompt | null {
   let qi = a - 1;
   while (qi >= 0 && !L[qi].trim()) qi--;
   const question = (L[qi] ?? '').trim();
+  // Blank and pure-dash lines are layout and carry nothing; every other line goes into `text`.
   const ctx: string[] = [];
-  for (let i = qi - 1; i >= 0 && ctx.length < 14; i--) {
-    if (SOLID.test(L[i])) break;
+  let top = false, capped = false;
+  for (let i = qi - 1; i >= 0; i--) {
+    if (SOLID.test(L[i])) { top = true; break; }
     if (DASHED.test(L[i]) || !L[i].trim()) continue;
+    if (ctx.length >= MAX_CTX) { capped = true; break; }
     ctx.unshift(L[i].trim());
   }
-  const lines = ctx.filter((l) => !/^Tip:/i.test(l));
+  const lines = ctx.filter((l) => !/^Tip:/i.test(l));   // display only; `text` keeps them
   const title = lines[0] ?? question;
   const body = lines.slice(1, 5);
-  return { title, body, question, options, kind: 'menu', key: `${title}|${question}|${options.map((o) => o.label).join('|')}` };
+  const text = ctx.join(' · ');
+  const complete = top && !capped && ctx.length > 0 && !ctx.some((l) => l.includes('·'));
+  return { title, body, question, options, kind: 'menu', text, complete, key: `${title}|${question}|${options.map((o) => o.label).join('|')}|${text}` };
 }
+const MAX_CTX = 14;
 
 function parseYN(L: string[]): Prompt | null {
   // only the question being answered right now: among the last two non-empty lines
@@ -87,7 +96,9 @@ function parseYN(L: string[]): Prompt | null {
     if (!YN.test(L[i])) continue;
     const question = L[i].trim();
     const ctx = L.slice(Math.max(0, i - 4), i).map((l) => l.trim()).filter(Boolean);
-    return { title: ctx[0] ?? question, body: ctx.slice(1), question, options: [], kind: 'yn', key: `yn|${question}` };
+    // A (y/n) question has no frame: what is above the last 4 lines is unknown, so it is never `complete`.
+    const text = ctx.join(' · ');
+    return { title: ctx[0] ?? question, body: ctx.slice(1), question, options: [], kind: 'yn', text, complete: false, key: `yn|${question}|${text}` };
   }
   return null;
 }

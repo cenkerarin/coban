@@ -1,7 +1,7 @@
 import net from 'node:net';
 import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
-import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, type ApprovalRule } from './config.ts';
+import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, TOKEN_PATH, type ApprovalRule } from './config.ts';
 import { repoMap, snippets } from './context.ts';
 import { allUsage, fmtEta, fmtTokens, type AccountUsage } from './usage.ts';
 import { readHistory } from './history.ts';
@@ -27,7 +27,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban approve <id> [yes|always|no]  izni yanıtla (varsayılan yes)
   coban rule add "<regex>" [--cwd dizin] [--profile id]
                                       kalıcı onay kuralı: izin metni regex ile TAM eşleşirse otomatik "yes"
-                                      (metin: coban approvals'taki gövde satırları " · " ile birleşik; varsayılan kural yok)
+                                      (metin: coban approvals'taki başlık ve tüm satırlar " · " ile birleşik; varsayılan kural yok)
   coban rule list | coban rule rm <no>
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
   coban kill <id> [--rm-worktree]     --rm-worktree: işçinin worktree'sini de sil (değişiklik varsa silmez; dal kalır)
@@ -40,11 +40,22 @@ Agent'ların içinden (veya başka bir terminalden):
 
 Her komut --json ile ham çıktı verir.`;
 
+// Inside an agent's environment (coban sets COBAN_TOKEN/COBAN_AGENT there). Such a process never reaches for the
+// user token or edits rules offline, even when the variable is emptied.
+const inAgent = () => 'COBAN_TOKEN' in process.env || 'COBAN_AGENT' in process.env;
+
+// The hub knows callers by token only: an agent's own COBAN_TOKEN, else (a human's terminal) the user token file.
+function token(): string {
+  if (inAgent()) return process.env.COBAN_TOKEN ?? '';
+  try { return fs.readFileSync(TOKEN_PATH, 'utf8').trim(); } catch { return ''; }
+}
+
 function call(method: string, params: object): Promise<any> {
   return new Promise((resolve, reject) => {
     const s = net.connect(SOCK);
     let buf = '';
-    s.on('connect', () => s.write(JSON.stringify({ caller: process.env.COBAN_AGENT || 'user', method, params }) + '\n'));
+    // `caller` is ignored by this hub (identity = token); it only keeps an older coban still running mid-upgrade working.
+    s.on('connect', () => s.write(JSON.stringify({ token: token(), caller: process.env.COBAN_AGENT || 'user', method, params }) + '\n'));
     s.on('data', (d) => {
       buf += d;
       const i = buf.indexOf('\n');
@@ -166,7 +177,8 @@ async function main() {
         const p = x.prompt;
         if (!p) return `${x.id}  ${x.profile}  soru okunamadı — coban read ${x.id}`;
         const opts = p.options.map((o: any, i: number) => `${i + 1}) ${o.label}`).join('  ');
-        return [`${x.id}  ${x.profile}  ${p.title}${p.body.length ? ': ' + p.body.join(' · ') : ''}`, `  ? ${p.question}${opts ? '  ' + opts : ''}`].join('\n');
+        // The first line is exactly the text rules match (p.text); a prompt rules can't see whole is marked.
+        return [`${x.id}  ${x.profile}  ${p.text || p.title}${p.complete ? '' : '  (tam okunamadı: kural uygulanmaz)'}`, `  ? ${p.question}${opts ? '  ' + opts : ''}`].join('\n');
       }).join('\n') : '(izin bekleyen yok)');
     }
     case 'approve': {
@@ -181,6 +193,8 @@ async function main() {
         try { return await call(method, params); }
         catch (e: any) { if (!/çalışmıyor/.test(e.message)) throw e; return offline(); }
       };
+      // Rules widen permissions: never from an agent, not even through the offline config edit below.
+      if ((sub === 'add' || sub === 'rm') && inAgent()) { console.error('coban: kural ekleme/silme yalnız kullanıcıdan (agent içinden değil)'); process.exit(1); }
       if (sub === 'add') {
         if (!pos[1]) { console.error('kullanım: coban rule add "<regex>" [--cwd dizin] [--profile id]'); process.exit(1); }
         const rule: ApprovalRule = { match: pos[1], ...(str(flags.cwd) ? { cwd: str(flags.cwd) } : {}), ...(str(flags.profile) ? { profile: str(flags.profile) } : {}) };

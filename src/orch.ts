@@ -2,6 +2,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { exec, execFileSync } from 'node:child_process';
+import { safeTest } from './config.ts';
 
 // Per-worker extras set at spawn time (`--worktree`, `--verify`).
 export type Job = {
@@ -27,6 +28,9 @@ function git(cwd: string, ...args: string[]): string {
 export function addWorktree(base: string, id: string, branch?: string): { dir: string; branch: string } {
   const root = git(base, 'rev-parse', '--show-toplevel');
   const br = branch || `coban/${id}`;
+  // A branch name is passed to git as an argument: never let it read as an option, and only accept valid ref names.
+  if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(br) || br.includes('..')) throw new Error(`geçersiz dal adı: ${JSON.stringify(br)}`);
+  git(root, 'check-ref-format', '--branch', br);
   let dir = path.join(path.dirname(root), `${path.basename(root)}-${id}`);
   for (let n = 2; fs.existsSync(dir); n++) dir = path.join(path.dirname(root), `${path.basename(root)}-${id}-${n}`);
   let exists = true;
@@ -59,5 +63,6 @@ export function tail(text: string, lines = 40, chars = 3000): string {
 // Config `verifyAllow`: when set, a verify command must fully match one of these regexes; unset keeps the old behaviour.
 export function checkVerify(cmd: string | undefined, allow: string[] | undefined) {
   if (!cmd || !allow) return;
-  if (!allow.some((r) => new RegExp(`^(?:${r})$`).test(cmd))) throw new Error(`doğrulama komutu verifyAllow listesinde değil: ${cmd}`);
+  const ok = allow.some((r) => { try { return safeTest(new RegExp(`^(?:${r})$`), cmd); } catch { return false; } });
+  if (!ok) throw new Error(`doğrulama komutu verifyAllow listesinde değil: ${cmd}`);
 }

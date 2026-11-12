@@ -1,10 +1,11 @@
 import fs from 'node:fs';
 import net from 'node:net';
+import { randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { EventEmitter } from 'node:events';
 import { notify, type Notifier } from './notify.ts';
 import { Agent, ERROR_LABEL, errorKind, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
-import { BIN_DIR, DEFAULT_SOCK, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, type ApprovalRule, type Config, type Profile } from './config.ts';
+import { BIN_DIR, checkName, DEFAULT_SOCK, MAX_MATCH_TEXT, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, TOKEN_PATH, type ApprovalRule, type Config, type Profile } from './config.ts';
 import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
@@ -26,6 +27,12 @@ const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
 export const WORKER_COMMANDS = ['post', 'send', 'inbox', 'board', 'agents', 'read', 'map', 'wait'];
 // RPC methods that act on other agents or widen permissions: only the user or the orchestrator may call them.
 const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
+// RPC methods only the human may call (user token): permissions and other agents' credentials.
+const USER_ONLY = new Set(['rule_add', 'rule_rm', 'agent_token']);
+// Ids an agent can never get: they name the human, the board, coban itself and unauthenticated callers.
+const RESERVED_IDS = new Set(['user', 'all', 'coban', 'anon']);
+const MAX_LINE = 1 << 20;   // one RPC request; a client that sends more without a newline is cut off
+const newToken = () => randomBytes(24).toString('hex');
 
 export function launchFor(p: Profile): { args: string[]; env: Record<string, string> } {
   const bin = p.cmd.trim().split(/\s+/)[0].split('/').pop();
@@ -145,6 +152,10 @@ export class Hub extends EventEmitter {
   worked = new Set<string>();                      // agents that have been 'working' at least once
   private msgSeq = 0;
   private server?: net.Server;
+  // Caller identity comes from a secret, never from a name the caller states: every agent gets its own random token
+  // (env COBAN_TOKEN, see spawn), the human's CLI reads userToken from TOKEN_PATH (0600, written by listen()).
+  private tokens = new Map<string, string>();      // token → agent id
+  private userToken = '';
 
   constructor(cfg: Config) {
     super();
@@ -163,7 +174,8 @@ export class Hub extends EventEmitter {
 
   private newId(base: string) {
     const taken = (x: string) => this.agents.has(x) || this.queue.some((j) => j.id === x);
-    if (!taken(base) && base !== 'user' && base !== 'all') return base;
+    checkName(base);
+    if (!taken(base) && !RESERVED_IDS.has(base)) return base;
     for (let n = 2; ; n++) if (!taken(`${base}-${n}`)) return `${base}-${n}`;
   }
 
@@ -171,6 +183,7 @@ export class Hub extends EventEmitter {
     const p = this.profile(o.profile);
     checkVerify(o.verify, this.cfg.verifyAllow);
     const id = this.newId(o.name || (o.role === 'orchestrator' ? 'orkestra' : p.id));
+    const token = newToken();
     const launch = launchFor(p);
     const parts = [p.cmd, ...launch.args];
     // orchestratorModel is a Claude model id: applying it to codex/opencode/cursor breaks them ("model not supported").
@@ -184,13 +197,14 @@ export class Hub extends EventEmitter {
       else task = brief + '\n\nBu talimatı oku ve yalnızca "hazır" de; kullanıcının isteğini bekle.' + (task ? '\n\n' + task : '');
     }
     if (task && o.role === 'worker') task = WORKER_PREAMBLE(id, this.orchestratorId || 'user') + task;
-    if (task) parts.push((p.promptArg ?? '{prompt}').replace('{prompt}', q(task)));
+    if (task) parts.push((p.promptArg ?? '{prompt}').replace('{prompt}', () => q(task)));   // fn: no `$&`-style patterns
 
     const env: Record<string, string> = {
       ...(process.env as Record<string, string>),
       ...launch.env,
       ...(p.env ?? {}),
-      COBAN_AGENT: id,
+      COBAN_AGENT: id,              // display only; identity is the token
+      COBAN_TOKEN: token,
       COBAN_SOCK: SOCK,
       PATH: `${BIN_DIR}:${process.env.PATH}`,
       TERM: 'xterm-256color',
@@ -245,6 +259,7 @@ export class Hub extends EventEmitter {
       this.emit('change');
     });
     if (wt || o.verify) this.jobs.set(id, { worktree: wt?.dir, branch: wt?.branch, verify: o.verify, verifyTries: 0 });
+    this.tokens.set(token, id);
     this.agents.set(id, a);
     this.order.push(id);
     if (!this.focus) this.focus = id;
@@ -261,6 +276,7 @@ export class Hub extends EventEmitter {
     }
     const a = this.get(id);
     a.kill();
+    for (const [t, x] of this.tokens) if (x === id) this.tokens.delete(t);
     const job = this.jobs.get(id);
     this.jobs.delete(id);
     this.worked.delete(id);
@@ -361,6 +377,9 @@ export class Hub extends EventEmitter {
 
   // ── messaging ────────────────────────────────────────────────
   post(from: string, to: string, text: string): Msg {
+    // An agent's text must not be able to fake coban's own framing ("[coban mesajı · user → …]", "[coban] …") and pass
+    // itself off as the user or coban once it is pasted into another agent's terminal.
+    if (from !== 'user' && from !== 'coban') text = text.replace(/\[(\s*coban)/gi, '($1');
     const m: Msg = { id: ++this.msgSeq, from, to, text, ts: Date.now(), delivered: false };
     this.log.push(m);
     if (this.log.length > 500) this.log.shift();
@@ -566,8 +585,10 @@ export class Hub extends EventEmitter {
   }
 
   // Standing approvals (config `rules`): answer "yes" to a blocked agent whose prompt fully matches a rule.
-  // Never "always"; prompts whose body may be cut off (the parser keeps at most 4 lines) are left to a human.
+  // Never "always". Rules see the whole dialog (title, every line, Tip: lines too: p.text); a prompt the parser can't
+  // prove it read completely (no top separator, line limit hit, a (y/n) question, ambiguous " · ") is left to a human.
   private autoAnswered = new Map<string, { key: string; at: number }>();
+  private autoMissed = new Map<string, string>();   // agent → prompt+rules already checked without a match
   private autoBusy = false;
   async autoApprove() {
     const rules = this.cfg.rules;
@@ -577,12 +598,14 @@ export class Hub extends EventEmitter {
       for (const x of this.approvals()) {
         const a = this.agents.get(x.id)!;
         const p = x.prompt;
-        if (!p || p.body.length === 0 || p.body.length >= 4) continue;
+        if (!p || !p.complete || p.text.length > MAX_MATCH_TEXT) continue;
         const last = this.autoAnswered.get(x.id);
         if (last && last.key === p.key && Date.now() - last.at < 3000) continue;   // screen hasn't caught up yet
-        const text = p.body.join(' · ');
+        const sig = p.key + '\0' + JSON.stringify(rules);
+        if (this.autoMissed.get(x.id) === sig) continue;   // same prompt, same rules: no need to run the regexes again
+        const text = p.text;
         const i = rules.findIndex((r) => ruleMatches(r, text, path.resolve(a.cwd), a.profile.id));
-        if (i < 0) continue;
+        if (i < 0) { this.autoMissed.set(x.id, sig); continue; }
         this.autoAnswered.set(x.id, { key: p.key, at: Date.now() });
         try {
           await this.answer(x.id, 'yes', p.key);
@@ -628,10 +651,20 @@ export class Hub extends EventEmitter {
   }
 
   // ── RPC over unix socket (used by the `coban` CLI inside agents) ─────
-  // Callers are 'user' (the CLI outside agents) or an agent id. Workers only read and message.
+  // Callers are 'user' (the CLI outside agents, holding the user token), an agent id (its COBAN_TOKEN) or 'anon'.
+  // Workers and anon only read and message.
   private privileged(caller: string) { return caller === 'user' || (!!this.orchestratorId && caller === this.orchestratorId); }
 
+  // Who is calling: the user token → 'user', an agent's token → its id, anything else (none, stale, guessed) → 'anon',
+  // an unprivileged caller that is no agent at all.
+  callerFor(token: unknown): string {
+    if (typeof token !== 'string' || !token) return 'anon';
+    if (this.userToken && token === this.userToken) return 'user';
+    return this.tokens.get(token) ?? 'anon';
+  }
+
   async handle(caller: string, method: string, p: any): Promise<unknown> {
+    if (USER_ONLY.has(method) && caller !== 'user') throw new Error(`${method} yalnız kullanıcıdan (agent içinden değil)`);
     if (PRIVILEGED.has(method) && !this.privileged(caller)) throw new Error(`${method} yalnız kullanıcıdan veya orkestratörden (${caller} işçi)`);
     switch (method) {
       case 'agents': {
@@ -695,6 +728,11 @@ export class Hub extends EventEmitter {
         saveRules(rules);
         return { removed: gone };
       }
+      case 'agent_token': {   // user only: lets the human (and tests) run the CLI as a given agent
+        this.get(p.id);
+        for (const [t, x] of this.tokens) if (x === p.id) return { token: t };
+        throw new Error(`agent yok: ${p.id}`);
+      }
       case 'kill': { const note = this.kill(p.id, { removeWorktree: !!p.removeWorktree }); return { ok: true, ...(note ? { note } : {}) }; }
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);
@@ -702,29 +740,40 @@ export class Hub extends EventEmitter {
   }
 
   listen() {
-    fs.mkdirSync(STATE_DIR, { recursive: true });
-    try { fs.unlinkSync(SOCK); } catch {}
+    // Only this OS user may reach the socket and read the user token: private dir, 0600 socket and token file.
+    fs.mkdirSync(STATE_DIR, { recursive: true, mode: 0o700 });
+    try { fs.chmodSync(STATE_DIR, 0o700); } catch {}
+    fs.mkdirSync(path.dirname(SOCK), { recursive: true, mode: 0o700 });
+    // Remove a stale socket, but never some other file COBAN_SOCK happens to point at.
+    try { if (fs.lstatSync(SOCK).isSocket()) fs.unlinkSync(SOCK); } catch {}
+    this.userToken = newToken();
+    try { fs.unlinkSync(TOKEN_PATH); } catch {}
+    fs.writeFileSync(TOKEN_PATH, this.userToken + '\n', { mode: 0o600, flag: 'wx' });   // wx: never through a planted symlink
     this.server = net.createServer((sock) => {
       let buf = '';
       sock.on('data', async (d) => {
         buf += d;
+        if (buf.length > MAX_LINE && buf.indexOf('\n') < 0) { sock.destroy(); return; }
         let i;
         while ((i = buf.indexOf('\n')) >= 0) {
           const line = buf.slice(0, i); buf = buf.slice(i + 1);
           let req: any;
           try { req = JSON.parse(line); } catch { continue; }
-          try { sock.write(JSON.stringify({ ok: true, result: await this.handle(req.caller || 'user', req.method, req.params ?? {}) }) + '\n'); }
+          // `req.caller` (a name the client states) is ignored: identity is the token alone.
+          try { sock.write(JSON.stringify({ ok: true, result: await this.handle(this.callerFor(req.token), req.method, req.params ?? {}) }) + '\n'); }
           catch (e: any) { sock.write(JSON.stringify({ ok: false, error: e.message }) + '\n'); }
         }
       });
       sock.on('error', () => {});
     });
-    this.server.listen(SOCK);
+    const old = process.umask(0o077);   // the socket is created 0600 (chmod below covers platforms that ignore umask)
+    try { this.server.listen(SOCK, () => { try { fs.chmodSync(SOCK, 0o600); } catch {} }); } finally { process.umask(old); }
   }
 
   shutdown() {
     for (const a of this.agents.values()) a.kill();
     this.server?.close();
     try { fs.unlinkSync(SOCK); } catch {}
+    try { if (fs.readFileSync(TOKEN_PATH, 'utf8').trim() === this.userToken) fs.unlinkSync(TOKEN_PATH); } catch {}
   }
 }

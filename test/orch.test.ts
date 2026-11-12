@@ -111,7 +111,7 @@ test('privileged RPCs (spawn/approve/key/kill/rule) only from the user or the or
   const dir = tmp();
   hub.spawn({ profile: 'fake', role: 'worker', name: 'pw', task: 'iş', cwd: dir });
   for (const [m, p] of [['approve', { id: 'pw' }], ['key', { id: 'pw', keys: ['y'] }], ['kill', { id: 'pw' }], ['spawn', { profile: 'fake', task: 'x' }], ['rule_add', { match: '.*' }]] as const)
-    await assert.rejects(hub.handle('pw', m, p), new RegExp(`${m} yalnız kullanıcıdan veya orkestratörden`), m);
+    await assert.rejects(hub.handle('pw', m, p), new RegExp(`${m} yalnız kullanıcıdan`), m);   // rule_*: user only
   assert.ok(hub.agents.has('pw'), 'worker could not kill itself');
   // Reading and messaging stay open to workers.
   assert.ok((await hub.handle('pw', 'post', { to: 'user', text: 'merhaba' }) as any).ok);

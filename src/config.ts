@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
+import vm from 'node:vm';
 
 export type Profile = {
   id: string;
@@ -27,8 +28,8 @@ export type Config = {
 };
 
 // Standing approval: a permission prompt is answered "yes" automatically when `match` (a regex, anchored: it must
-// match the WHOLE prompt text as `coban approvals` shows it, body lines joined by " · ") fits and, if given,
-// the agent runs in `cwd` (or below it) and uses `profile`.
+// match the WHOLE prompt text as `coban approvals` shows it: title and every content line of the dialog, joined by
+// " · ") fits and, if given, the agent runs in `cwd` (or below it) and uses `profile`.
 export type ApprovalRule = { match: string; cwd?: string; profile?: string };
 
 export const ROOT = path.resolve(path.dirname(new URL(import.meta.url).pathname), '..');
@@ -36,6 +37,9 @@ export const BIN_DIR = path.join(ROOT, 'bin');
 export const STATE_DIR = path.join(os.homedir(), '.coban');
 export const DEFAULT_SOCK = path.join(STATE_DIR, 'coban.sock');
 export const SOCK = process.env.COBAN_SOCK || DEFAULT_SOCK;
+// The human's credential for the hub socket: a random token written (0600) next to the socket each time coban starts.
+// Agents get their own per-agent token in COBAN_TOKEN instead and never this one (see Hub.spawn / cli.ts call).
+export const TOKEN_PATH = SOCK.replace(/\.sock$/, '') + '.token';
 export const CONFIG_PATH = process.env.COBAN_CONFIG || path.join(os.homedir(), '.config', 'coban', 'config.json');
 
 export const OPUS = 'claude-opus-5-5';
@@ -73,13 +77,33 @@ export const saveChatWidth = (share: number) => saveLayout({ chatWidth: share })
 export function saveRules(rules: ApprovalRule[]) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
   raw.rules = rules;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n', { mode: 0o600 });
 }
 
 // Anchored on purpose: a rule for `rm -rf build` must never fire for `rm -rf build /`.
 export function ruleRegex(match: string): RegExp {
   if (!match.trim()) throw new Error('boş regex olmaz');
+  if (match.length > 500) throw new Error('regex çok uzun (en fazla 500 karakter)');
   return new RegExp(`^(?:${match})$`);
+}
+
+// Regexes from config (rules, verifyAllow) run against text an agent controls (its screen, its verify command):
+// a pattern with catastrophic backtracking must not freeze the hub. Each test runs under a time limit; over it,
+// or over MAX_MATCH_TEXT, counts as no match.
+const MATCH_MS = 50;
+export const MAX_MATCH_TEXT = 4000;
+const reCtx = vm.createContext({ re: /$^/, s: '' });
+const reRun = new vm.Script('re.test(s)');
+export function safeTest(re: RegExp, text: string): boolean {
+  if (text.length > MAX_MATCH_TEXT) return false;
+  reCtx.re = re; reCtx.s = text;
+  try { return reRun.runInContext(reCtx, { timeout: MATCH_MS }) === true; } catch { return false; } finally { reCtx.s = ''; }
+}
+
+// Agent ids end up in file names (worktree dir, .coban/reports/<id>.md), env and messages: keep them plain.
+export const NAME_RE = /^[A-Za-z0-9][A-Za-z0-9._-]{0,47}$/;
+export function checkName(name: string, what = 'ad') {
+  if (!NAME_RE.test(name) || name.includes('..')) throw new Error(`geçersiz ${what}: ${JSON.stringify(name)} (harf, rakam, . _ - ; en fazla 48)`);
 }
 
 export function ruleMatches(r: ApprovalRule, text: string, cwd: string, profile: string): boolean {
@@ -88,7 +112,9 @@ export function ruleMatches(r: ApprovalRule, text: string, cwd: string, profile:
     const d = path.resolve(expand(r.cwd));
     if (cwd !== d && !cwd.startsWith(d + path.sep)) return false;
   }
-  try { return ruleRegex(r.match).test(text); } catch { return false; }
+  let re: RegExp;
+  try { re = ruleRegex(r.match); } catch { return false; }
+  return safeTest(re, text);
 }
 
 export function appendProfile(p: Profile) {

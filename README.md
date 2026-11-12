@@ -106,7 +106,7 @@ Note: the prompts coban gives the orchestrator and workers, and `coban --help`, 
 | agent shows `✗ hata` (error) | it can't work at all: logged out (`cursor-agent login`, `codex login`), expired token, or its model provider rejects requests. coban tells the orchestrator, which should move the task. For Claude, log in with the profile's `CLAUDE_CONFIG_DIR` |
 | a profile is missing | its CLI is not on `PATH` when coban first ran: install it and delete the config file, or add the profile by hand |
 | `coban çalışmıyor` from a `coban ...` command | open the TUI first with plain `coban`: those commands talk to the running app |
-| stale socket after a crash | `rm ~/.coban/coban.sock` |
+| stale socket after a crash | `rm ~/.coban/coban.sock` (coban also replaces it at start) |
 | Codex: `coban: connect EPERM` | coban launches codex with `--sandbox workspace-write` and the socket's directory as a writable root, **without network access**. Some sandboxes (macOS Seatbelt) still refuse the unix socket then; opt in per profile with `"network": true` (adds `-c sandbox_workspace_write.network_access=true`: the agent's commands can then reach the internet too). If your profile sets its own `--sandbox`, it must allow the socket itself |
 | Cursor asks before every `coban` call | add `"Shell(coban)"` to `permissions.allow` in `~/.cursor/cli-config.json`, or answer from coban's approval box |
 
@@ -244,8 +244,14 @@ Only the user (the `coban` CLI outside an agent) and the orchestrator may call `
 `agents`, `read`, `map`, `wait`), so a worker cannot approve its own permission prompt. OpenCode workers get a
 prompt-free allow only for those read/messaging subcommands. When an agent can't work, the orchestrator is told a
 fixed category (no login / expired token / provider rejected), never the raw screen line (shown to you in the feed).
-The caller id comes from `COBAN_AGENT` in the agent's environment and is not authenticated: a worker that rewrites
-it can still pose as the user. These checks stop prompt-injected or confused agents, not a deliberately hostile one.
+Identity is a secret, not a name: every agent gets its own random `COBAN_TOKEN` (`COBAN_AGENT` is display only),
+and the user's CLI reads a token coban writes at start to `~/.coban/coban.token` (next to the socket, both `0600`,
+`~/.coban` is `0700`). A request with no or an unknown token is an unprivileged `anon` caller; inside an agent's
+environment the CLI never reads the user token, and `coban rule add/rm` refuses to run there (also offline). Agent
+names are plain (`[A-Za-z0-9._-]`, no `coban`/`anon`), and what an agent posts can't fake coban's own `[coban …]`
+framing. What stays out of reach: agents run as your OS user, so one that is allowed to run arbitrary shell commands
+(outside the prompt-free `coban …` allowlist) can still read `~/.coban/coban.token` or another process's
+environment. These checks stop prompt-injected or confused agents, not a deliberately hostile one with free shell.
 
 ## Known gaps
 
@@ -261,6 +267,11 @@ MIT
 ### Standing approvals
 
 `coban rule add "<regex>" [--cwd dir] [--profile id]` auto-answers *yes* (never "always") to a permission prompt whose text
-matches. The regex is anchored (must match the whole text, the body lines of `coban approvals` joined by ` · `), there are no
-default rules, prompts with 4+ body lines are never auto-approved, and only the user (not an agent) can add or remove rules.
+matches. The regex is anchored and must match the whole text: the dialog's title and *every* line of it (Tip: lines
+too), joined by ` · `, exactly as the first line of `coban approvals` shows it, e.g.
+`Bash command · Remove the build folder · rm -rf build`. A prompt coban can't prove it read whole (top border off
+screen, more than 14 lines, a plain `(y/n)` question, a line that itself contains ` · `) is never auto-approved and is
+marked in `coban approvals`. Each regex runs under a 50 ms limit (a catastrophic pattern counts as no match). There are no
+default rules and only the user (not an agent) can add or remove them. Rules written for 0.3 (body only) no longer
+match: prefix them with the title.
 `coban rule list` / `coban rule rm <n>`; rules live in the config's `rules`.

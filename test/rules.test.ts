@@ -42,12 +42,12 @@ test('no rules by default; rule add/list/rm; auto-approve; agents cannot add rul
   assert.match(await c.cli('', 'agents'), /^m1 .*blocked/m, 'a partial regex does not approve');
 
   // the exact text, scoped to a profile and the working directory
-  assert.match(await c.cli('', 'rule', 'add', 'Remove the build folder · rm -rf build', '--profile', 'fake', '--cwd', fs.realpathSync(c.dir)), /kural #2 eklendi/);
+  assert.match(await c.cli('', 'rule', 'add', 'Bash command · Remove the build folder · rm -rf build', '--profile', 'fake', '--cwd', fs.realpathSync(c.dir)), /kural #2 eklendi/);
   await until(async () => (await c!.cli('', 'read', 'm1')).includes('chose: Yes'));   // plain "Yes", never "always"
   assert.ok(!(await c.cli('', 'read', 'm1')).includes("chose: Yes, and"));
   assert.match(await c.cli('', 'board'), /kural #2 ile otomatik onaylandı: m1/);
   assert.equal(cfgRules().length, 2, 'rules are saved in the config');
-  assert.match(await c.cli('', 'rule', 'list'), /^2 {2}\/Remove the build folder · rm -rf build\/ {2}cwd=.* {2}profil=fake$/m);
+  assert.match(await c.cli('', 'rule', 'list'), /^2 {2}\/Bash command · Remove the build folder · rm -rf build\/ {2}cwd=.* {2}profil=fake$/m);
 
   assert.match(await c.cli('', 'rule', 'rm', '1'), /kural silindi: rm -rf build/);
   assert.match(await c.cli('', 'rule', 'rm', '9'), /ERR .*böyle bir kural yok/);
@@ -55,7 +55,7 @@ test('no rules by default; rule add/list/rm; auto-approve; agents cannot add rul
 
   // a rule for another directory does not apply
   assert.match(await c.cli('', 'rule', 'rm', '1'), /kural silindi/);
-  await c.cli('', 'rule', 'add', 'Remove the build folder · rm -rf build', '--cwd', '/nonexistent');
+  await c.cli('', 'rule', 'add', 'Bash command · Remove the build folder · rm -rf build', '--cwd', '/nonexistent');
   await c.cli('orkestra', 'spawn', 'fake', 'yine MENU', '--name', 'm2');
   await until(async () => /^m2 .*blocked/m.test(await c!.cli('', 'agents')));
   await sleep(1500);
