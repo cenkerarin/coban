@@ -169,6 +169,13 @@ export class Hub extends EventEmitter {
   log: Msg[] = [];
   board: Msg[] = [];                              // shared box: `coban post all`
   notifier: Notifier = (t, x) => { notify(this.cfg, t, x); };
+  private notifyTimers = new Map<string, ReturnType<typeof setTimeout>>();
+  private maybeNotify(a: Agent, s: 'blocked' | 'limited') {
+    const k = `${a.id}:${s}`, now = Date.now();
+    if (now - (this.notifiedAt.get(k) ?? 0) <= 300000) return;
+    this.notifiedAt.set(k, now);
+    try { this.notifier('coban', s === 'blocked' ? `${a.id} izin/onay bekliyor` : `${a.id} (${a.profile.id}) kullanım limitine takıldı`); } catch {}
+  }
   private notifiedAt = new Map<string, number>(); // agent:status → last notification time (debounce)
   handoffVerifyMs = 2000;                          // new handoff worker must survive this long before the old one dies
   limitedAt = new Map<string, number>();           // profile → last time one of its agents went 'limited'
@@ -255,12 +262,19 @@ export class Hub extends EventEmitter {
     a.on('render', () => this.emit('render', a));
     a.on('status', (s: Status) => {
       if (s === 'limited') this.limitedAt.set(a.profile.id, Date.now());
-      if ((s === 'blocked' || s === 'limited') && a.role !== 'manual') {
-        const k = `${a.id}:${s}`, now = Date.now();
-        if (now - (this.notifiedAt.get(k) ?? 0) > 30000) {
-          this.notifiedAt.set(k, now);
-          try { this.notifier('coban', s === 'blocked' ? `${a.id} izin/onay bekliyor` : `${a.id} (${a.profile.id}) kullanım limitine takıldı`); } catch {}
-        }
+      const pend = this.notifyTimers.get(a.id);
+      if (pend) { clearTimeout(pend); this.notifyTimers.delete(a.id); } // any status change cancels a pending blocked notice
+      if (s === 'limited' && a.role !== 'manual') this.maybeNotify(a, s);
+      else if (s === 'blocked' && a.role !== 'manual' && a.role !== 'orchestrator') {
+        // Only notify if still blocked after notifyDelay s (quick replies by the orchestrator/rules never notify).
+        const t = setTimeout(() => {
+          this.notifyTimers.delete(a.id);
+          if (a.status !== 'blocked' || this.agents.get(a.id) !== a) return;
+          if (!parsePrompt(a.screenText(40))) return; // not a real permission prompt
+          this.maybeNotify(a, 'blocked');
+        }, Math.max(0, (this.cfg.notifyDelay ?? 20) * 1000));
+        t.unref?.();
+        this.notifyTimers.set(a.id, t);
       }
       // Crashed worker (non-zero exit, not killed through the hub): retake its task once, like a limit handoff.
       if (s === 'exited' && a.role === 'worker' && a.exitCode !== 0 && !a.handedOff && this.agents.get(a.id) === a) {
