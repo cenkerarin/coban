@@ -50,7 +50,7 @@ test('^b < widens the chat pane, ^b > narrows it, and the choice is saved', asyn
 test('the share stops at its limits', async () => {
   const s = await withAgent(180, { chatWidth: 0.58 });
   s.write('\x02<'); await sleep(200); s.write('\x02<'); await sleep(200);
-  const saved = () => JSON.parse(fs.readFileSync(path.join(s.dir, 'config.json'), 'utf8')).chatWidth;
+  const saved = () => { try { return JSON.parse(fs.readFileSync(path.join(s.dir, 'config.json'), 'utf8')).chatWidth; } catch { return undefined; } };   // the file may be caught mid-write
   await until(() => saved() === 0.6);
 });
 

@@ -87,7 +87,11 @@ export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [f
   const tokens = new Map<string, string>();
   const tokenOf = async (id: string) => {
     if (!tokens.has(id)) {
-      try { tokens.set(id, (await confirming(rpc(sock, undefined, 'agent_token', { id }))).token); } catch { return ''; }
+      // The hub refuses a new box right after one closed ("biraz sonra tekrar dene") and while another is open: wait it out.
+      for (let i = 0; i < 20 && !tokens.has(id); i++) {
+        try { tokens.set(id, (await confirming(rpc(sock, undefined, 'agent_token', { id }))).token); }
+        catch (e) { if (!/biraz sonra|zaten onay/.test(String(e))) return ''; await sleep(500); }
+      }
     }
     return tokens.get(id)!;
   };
