@@ -45,6 +45,9 @@ const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
 
 const CHAT_SHARE = 0.42, CHAT_SHARE_MIN = 0.3, CHAT_SHARE_MAX = 0.6, CHAT_SHARE_STEP = 0.04;
+const SAVE_DEBOUNCE_MS = 300;
+// A config value may be anything: non-numbers fall back to the default, numbers are clamped.
+const sanitizeShare = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? clamp(v, CHAT_SHARE_MIN, CHAT_SHARE_MAX) : CHAT_SHARE;
 const RESIZE_REPEAT_MS = 1000;
 
 // The chat takes `share` of the screen; the feed gives up room in proportion so the graph isn't the only one squeezed.
@@ -175,6 +178,7 @@ export class Tui {
   showBoard = false;
   feedHidden = false;
   chatShare = CHAT_SHARE;
+  saveTimer?: NodeJS.Timeout;
   resizeUntil = 0; // until then, left/right arrows keep resizing without ^b
   selectMode = false;  // mouse released to the terminal so text can be selected/copied
   composing = false;   // keystrokes go to coban's own input line instead of the focused agent
@@ -209,7 +213,7 @@ export class Tui {
 
   constructor(hub: Hub) {
     this.hub = hub;
-    this.chatShare = clamp(hub.cfg.chatWidth ?? CHAT_SHARE, CHAT_SHARE_MIN, CHAT_SHARE_MAX);
+    this.chatShare = sanitizeShare(hub.cfg.chatWidth);
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
@@ -240,6 +244,7 @@ export class Tui {
   }
 
   stop() {
+    this.flushChatWidth();
     out.write('\x1b[0m\x1b[?25h\x1b[?1l\x1b[?1000l\x1b[?1002l\x1b[?1003l\x1b[?1006l\x1b[?2004l\x1b[?1049l');
     process.stdin.setRawMode(false);
   }
@@ -381,9 +386,19 @@ export class Tui {
     this.schedule();
   }
 
+  flushChatWidth() {
+    if (!this.saveTimer) return;
+    clearTimeout(this.saveTimer);
+    this.saveTimer = undefined;
+    try { saveChatWidth(this.chatShare); } catch { /* an unwritable config must not crash the TUI */ }
+  }
+
   resizeChat(delta: number) {
-    this.chatShare = clamp(Math.round((this.chatShare + delta) * 100) / 100, CHAT_SHARE_MIN, CHAT_SHARE_MAX);
-    saveChatWidth(this.chatShare);
+    const a = this.hub.agents.get(this.hub.focus);
+    if (this.geo?.mode === 'stack' || !a || a.exitCode !== null) return;   // nothing to resize / no chat to show
+    this.chatShare = sanitizeShare(Math.round((this.chatShare + delta) * 100) / 100);
+    clearTimeout(this.saveTimer);
+    this.saveTimer = setTimeout(() => this.flushChatWidth(), SAVE_DEBOUNCE_MS);
     this.resizeUntil = Date.now() + RESIZE_REPEAT_MS;
     this.prev = [];
     out.write('\x1b[2J');

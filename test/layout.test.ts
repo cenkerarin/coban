@@ -41,10 +41,10 @@ test('^b < widens the chat pane, ^b > narrows it, and the choice is saved', asyn
   const start = chatColumn(s.screen());
   s.write('\x02<');
   await until(() => chatColumn(s.screen()) < start);
-  assert.equal(saved(), 0.46);
+  await until(() => saved() === 0.46);   // saves are debounced
   s.write('\x02>');
   await until(() => chatColumn(s.screen()) === start);
-  assert.equal(saved(), 0.42);
+  await until(() => saved() === 0.42);
 });
 
 test('the share stops at its limits', async () => {
@@ -85,4 +85,21 @@ test('arrows keep resizing right after a resize, then go back to the agent', asy
   s.write('\x1b[D');
   await sleep(300);
   assert.equal(savedShare(s), 0.5);
+});
+
+test('a non-numeric chatWidth in the config falls back to the default', async () => {
+  const bad = await withAgent(180, { chatWidth: 'wide' });
+  const col = chatColumn(bad.screen());
+  await bad.stop(); c = undefined;
+  const plain = await withAgent(180);
+  assert.equal(col, chatColumn(plain.screen()));
+});
+
+test('in the stacked layout ^b < is a no-op', async () => {
+  c = await startCoban(90, 46, [fakeProfile()]);
+  const s = c;
+  s.write('\r'); await sleep(300); s.write('1'); await sleep(500);
+  await prefixThen(s, '<');
+  await sleep(600);
+  assert.equal(savedShare(s), undefined);
 });
