@@ -2,6 +2,7 @@ import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
 import type { AccountUsage } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
+import { saveChatWidth } from './config.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -42,6 +43,20 @@ const hex = (h?: string) => { const c = rgbOf(h); return c ? fg(c) : '39'; };
 const fit = (s: string, w: number) => (w <= 0 ? '' : s.length > w ? s.slice(0, Math.max(0, w - 1)) + '…' : s + ' '.repeat(w - s.length));
 const flat = (s: string) => s.replace(/\s+/g, ' ').trim();
 const clamp = (v: number, lo: number, hi: number) => Math.max(lo, Math.min(hi, v));
+
+const CHAT_SHARE = 0.42, CHAT_SHARE_MIN = 0.3, CHAT_SHARE_MAX = 0.6, CHAT_SHARE_STEP = 0.04;
+const RESIZE_REPEAT_MS = 1000;
+
+// The chat takes `share` of the screen; the feed gives up room in proportion so the graph isn't the only one squeezed.
+export function columnWidths(W: number, share: number, feedHidden: boolean) {
+  let fw = feedHidden || W < 140 ? 0 : clamp(Math.round(W * 0.24 * (1 - share) / (1 - CHAT_SHARE)), 30, 56);
+  let pw = clamp(Math.round(W * share), 64, 130);
+  let gw = W - fw - pw - (fw ? 2 : 1);
+  if (gw < 40) { const t = Math.min(40 - gw, pw - 60); pw -= t; gw += t; }
+  if (gw < 40 && fw) { const t = Math.min(40 - gw, fw - 26); fw -= t; gw += t; }
+  return { fw, gw, pw };
+}
+
 const hhmm = (ts: number) => { const t = new Date(ts); return `${String(t.getHours()).padStart(2, '0')}:${String(t.getMinutes()).padStart(2, '0')}`; };
 const hash = (s: string) => [...s].reduce((h, c) => (h * 31 + c.charCodeAt(0)) >>> 0, 7);
 const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
@@ -159,6 +174,8 @@ export class Tui {
   notice = '';
   showBoard = false;
   feedHidden = false;
+  chatShare = CHAT_SHARE;
+  resizeUntil = 0; // until then, left/right arrows keep resizing without ^b
   selectMode = false;  // mouse released to the terminal so text can be selected/copied
   composing = false;   // keystrokes go to coban's own input line instead of the focused agent
   draft = '';
@@ -192,6 +209,7 @@ export class Tui {
 
   constructor(hub: Hub) {
     this.hub = hub;
+    this.chatShare = clamp(hub.cfg.chatWidth ?? CHAT_SHARE, CHAT_SHARE_MIN, CHAT_SHARE_MAX);
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
@@ -309,6 +327,7 @@ export class Tui {
       this.prefix = false;
       return this.command(d);
     }
+    if (Date.now() < this.resizeUntil && /^\x1b[\[O][CD]$/.test(d)) return this.command(d);
     if (d === PREFIX) { this.prefix = true; return this.schedule(); }
     if (d[0] === PREFIX) { this.prefix = true; return this.input(d.slice(1)); } // ^b and the key in one read
     if (this.composing) return this.composeKey(d);
@@ -334,6 +353,8 @@ export class Tui {
       case 'o': if (hub.orchestratorId) hub.setFocus(hub.orchestratorId); else this.openPicker('orchestrator'); break;
       case 'm': this.showBoard = !this.showBoard; this.prev = []; out.write('\x1b[2J'); break;
       case 'l': this.feedHidden = !this.feedHidden; this.prev = []; out.write('\x1b[2J'); break;
+      case '<': case '\x1b[D': case '\x1bOD': this.resizeChat(CHAT_SHARE_STEP); break;
+      case '>': case '\x1b[C': case '\x1bOC': this.resizeChat(-CHAT_SHARE_STEP); break;
       case 's': this.selectMode = !this.selectMode; break;
       case 'c': this.composing = !this.composing; break;
       case 'y': this.answerSelected('yes'); break;
@@ -358,6 +379,14 @@ export class Tui {
         if (/^[1-9]$/.test(c) && hub.order[Number(c) - 1]) hub.setFocus(hub.order[Number(c) - 1]);
     }
     this.schedule();
+  }
+
+  resizeChat(delta: number) {
+    this.chatShare = clamp(Math.round((this.chatShare + delta) * 100) / 100, CHAT_SHARE_MIN, CHAT_SHARE_MAX);
+    saveChatWidth(this.chatShare);
+    this.resizeUntil = Date.now() + RESIZE_REPEAT_MS;
+    this.prev = [];
+    out.write('\x1b[2J');
   }
 
   // ── coban's own input line: "@id text" goes to that agent, "@all text" to the board, plain text to the focus ──
@@ -497,11 +526,7 @@ export class Tui {
       const P = Math.max(1, H - p.G - 4);
       return { mode: 'stack', fx: 0, fw: 0, gx: 0, gw: W, px: 0, pw: W, paneTop: p.G + 1, P, cy: p.G + 1 + P, p };
     }
-    let fw = this.feedHidden || W < 140 ? 0 : clamp(Math.round(W * 0.24), 30, 56);
-    let pw = clamp(Math.round(W * 0.42), 64, 130);
-    let gw = W - fw - pw - (fw ? 2 : 1);
-    if (gw < 40) { const t = Math.min(40 - gw, pw - 60); pw -= t; gw += t; }
-    if (gw < 40 && fw) { const t = Math.min(40 - gw, fw - 26); fw -= t; gw += t; }
+    const { fw, gw, pw } = columnWidths(W, this.chatShare, this.feedHidden);
     const gx = fw ? fw + 1 : 0;
     return { mode: 'cols', fx: 0, fw, gx, gw, px: gx + gw + 1, pw, paneTop: 1, P: Hb - 3, cy: Hb - 2, p: this.plan(gw, Hb, true) };
   }
@@ -1084,7 +1109,7 @@ export class Tui {
     const unreadBoard = hub.boardUnread('user');
     if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
     else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
-    else if (this.prefix) left = ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  s:kopyala  x:kapat  q:çık ';
+    else if (this.prefix) left = ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
     else left = ` ^b komut · ${hub.focus || '-'}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor (^b y/a/r${this.geo?.mode === 'stack' ? ', ^b i' : ''})` : ''}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
     const bg = this.prefix || this.mode !== 'normal' || this.selectMode ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
     const right = this.notice ? ` ${this.notice} ` : '';
