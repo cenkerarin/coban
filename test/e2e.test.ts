@@ -50,6 +50,13 @@ test('orchestrator, workers, messages, board and rendering', async () => {
   assert.match(s, /SOHBET/);
   assert.match(s, /w1 → ortak kutu|w1 →/);
 
+  // persistent history: lifecycle events and messages landed in the JSONL file and `coban history` reads them
+  const hist = await c.cli('', 'history', '--limit', '100');
+  assert.match(hist, /w1: işçi açıldı/);
+  assert.match(hist, /w1→all: şema değişti/);
+  assert.equal((await c.cli('', 'history', '--limit', '1')).split('\n').length, 1);
+  assert.match(fs.readFileSync(path.join(c.dir, 'history.jsonl'), 'utf8').split('\n')[0], /^\{"ts":/);
+
   assert.equal(await c.cli('', 'kill', 'w1'), 'kapatıldı: w1');
   assert.doesNotMatch(await c.cli('', 'agents'), /^w1 /m);
 });

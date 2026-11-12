@@ -80,6 +80,7 @@ export class Agent extends EventEmitter {
   status: Status = 'starting';
   settledSeq = 0;        // bumps every time the agent settles (idle/blocked/limited/exited)
   unread = false;        // settled while not focused
+  startedAt = Date.now();
   lastOutput = Date.now();
   lastBusy = 0;           // last time a BUSY marker was on screen
   cursorVisible = true;

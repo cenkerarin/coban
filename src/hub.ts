@@ -3,7 +3,8 @@ import net from 'node:net';
 import { EventEmitter } from 'node:events';
 import { Agent, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
 import { BIN_DIR, DEFAULT_SOCK, SOCK, STATE_DIR, type Config, type Profile } from './config.ts';
-import { allUsage, isClaude, type AccountUsage } from './usage.ts';
+import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
+import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
@@ -238,6 +239,7 @@ export class Hub extends EventEmitter {
     const m: Msg = { id: ++this.msgSeq, from, to, text, ts: Date.now(), delivered: false };
     this.log.push(m);
     if (this.log.length > 500) this.log.shift();
+    this.record({ ts: m.ts, kind: 'msg', id: from, to, text });
     if (to === 'user') { m.delivered = true; this.emit('notify', m); }
     else if (to === 'all') {
       // Not pushed into terminals (that would wake every idle agent); agents pull it via inbox/wait.
@@ -438,6 +440,23 @@ export class Hub extends EventEmitter {
   // Per-account usage, least spent first (for `coban usage` and the TUI).
   usage(): AccountUsage[] { return allUsage(this.cfg, this.limitedAt); }
 
+  // Persistent session history (feed events + messages) → STATE_DIR/history.jsonl.
+  record(e: HistoryEntry) { appendHistory(e); }
+
+  // Per-agent token spend and its account's remaining 5h budget; absent for non-Claude agents.
+  stats(): Map<string, { tokens: number; remainPct?: number; etaMs?: number | null }> {
+    const out = new Map<string, { tokens: number; remainPct?: number; etaMs?: number | null }>();
+    const fc = new Map(this.usage().map((u) => [u.profileId, forecast(u)]));
+    for (const [id, a] of this.agents) {
+      let tokens: number | null = null;
+      try { tokens = agentTokens(a.profile, a.cwd, a.startedAt); } catch {}
+      if (tokens === null) continue;
+      const f = fc.get(a.profile.id);
+      out.set(id, { tokens, ...(f ? { remainPct: f.remainPct, etaMs: f.etaMs } : {}) });
+    }
+    return out;
+  }
+
   list() {
     return this.order.map((id) => {
       const a = this.agents.get(id)!;
@@ -455,7 +474,11 @@ export class Hub extends EventEmitter {
   // ── RPC over unix socket (used by the `coban` CLI inside agents) ─────
   async handle(caller: string, method: string, p: any): Promise<unknown> {
     switch (method) {
-      case 'agents': return { agents: this.list(), profiles: this.cfg.profiles.map(({ id, title, model }) => ({ id, title, model })) };
+      case 'agents': {
+        const st = this.stats();
+        return { agents: this.list().map((a) => ({ ...a, ...(st.has(a.id) ? { usage: st.get(a.id) } : {}) })), profiles: this.cfg.profiles.map(({ id, title, model }) => ({ id, title, model })) };
+      }
+      case 'history': return { history: readHistory(p.limit ?? 50) };
       case 'spawn': {
         const a = this.spawn({ profile: p.profile, role: 'worker', task: p.task, name: p.name, cwd: p.cwd });
         return { id: a.id };

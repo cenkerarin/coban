@@ -1,6 +1,6 @@
 import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
-import type { AccountUsage } from './usage.ts';
+import { fmtTokens, type AccountUsage } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
 import { saveChatWidth } from './config.ts';
 
@@ -260,6 +260,7 @@ export class Tui {
   // ── hub observation: feed events + animations ────────────────
   event(id: string, glyph: string, color: string, text: string, detail?: string) {
     this.events.push({ ts: Date.now(), id, glyph, color, text, detail });
+    this.hub.record({ ts: Date.now(), kind: 'event', id, text, detail });
     if (this.events.length > 300) this.events.shift();
   }
 
@@ -608,7 +609,9 @@ export class Tui {
     const head: Seg[] = [[this.glyph(a), color], id, [this.marks(a), MARK]];
     if (level === 'mini') return [head];
     if (level === 'compact') return [[...head, [' ' + a.profile.title, pc]]];
-    return [head, [[a.profile.title, pc], [' · ' + this.label(a), DIM]]];
+    const st = this.stats.get(a.id);
+    const tok: Seg[] = st ? [[' · ' + fmtTokens(st.tokens) + (st.remainPct === undefined ? '' : ` · %${Math.round(st.remainPct * 100)}`), DIM]] : [];
+    return [head, [[a.profile.title, pc], [' · ' + this.label(a), DIM], ...tok]];
   }
 
   // Width a worker bubble needs, sized for its longest status label so bubbles don't jitter.
@@ -616,7 +619,7 @@ export class Tui {
     const head = 2 + a.id.length + 6;
     if (level === 'mini') return head;
     if (level === 'compact') return head + 1 + a.profile.title.length;
-    return Math.max(head, a.profile.title.length + 3 + Math.max(...Object.values(STATUS_STYLE).map(([, , l]) => l.length)) + 3);
+    return Math.max(head, a.profile.title.length + 3 + Math.max(...Object.values(STATUS_STYLE).map(([, , l]) => l.length)) + 3 + (a.profile.cmd.startsWith('claude') ? 13 : 0));
   }
 
   orchLines(a: Agent | undefined, compact: boolean): Seg[][] {
@@ -1107,12 +1110,13 @@ export class Tui {
   }
 
   usage: AccountUsage[] = [];
+  stats = new Map<string, { tokens: number; remainPct?: number }>(); // per worker, refreshed with usage
   usageAt = 0;
   refreshUsage() {
     if (this.now - this.usageAt < USAGE_MS) return;
     this.usageAt = this.now;
     setImmediate(() => { // off the render path; hub.usage() includes limitedAt
-      try { this.usage = this.hub.usage(); } catch { this.usage = []; }
+      try { this.usage = this.hub.usage(); this.stats = this.hub.stats(); } catch { this.usage = []; }
       this.schedule();
     });
   }

@@ -3,7 +3,8 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, SOCK } from './config.ts';
 import { repoMap, snippets } from './context.ts';
-import { allUsage, type AccountUsage } from './usage.ts';
+import { allUsage, fmtEta, fmtTokens, type AccountUsage } from './usage.ts';
+import { readHistory } from './history.ts';
 
 const HELP = `coban — çok hesaplı agent orkestratörü
 
@@ -27,6 +28,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban board [--limit n]             ortak kutunun son notları
   coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
   coban log [--limit n]
+  coban history [--limit n]           kalıcı oturum geçmişi (olaylar + mesajlar, ~/.coban/history.jsonl)
   coban account add                   yeni Claude hesabı ekle: giriş yaptırır, profili config'e yazar (arayüz kapalıyken)
 
 Her komut --json ile ham çıktı verir.`;
@@ -108,9 +110,10 @@ async function main() {
   const print = (r: unknown, text: () => string) => console.log(json ? JSON.stringify(r) : text());
   const short = (m?: string) => (m ? m.replace(/^claude-/, '') : '');
   const one = (s: string) => s.replace(/\s+/g, ' ').trim();
+  const usageTag = (u: any) => `tok=${fmtTokens(u.tokens)}` + (u.remainPct === undefined ? '' : ` kalan=%${Math.round(u.remainPct * 100)}${u.etaMs === null ? '' : ' ' + fmtEta(u.etaMs)}`);
   const agentLine = (a: any) =>
     [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : a.role === 'manual' ? 'manuel' : '', a.status,
-      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
+      a.unreadMessages ? `✉${a.unreadMessages}` : '', a.usage ? usageTag(a.usage) : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
       .filter(Boolean).join('  ');
 
   switch (cmd) {
@@ -171,10 +174,19 @@ async function main() {
       const r = await call('log', { limit: num(flags.limit) });
       return print(r, () => r.messages.map((m: any) => `${new Date(m.ts).toTimeString().slice(0, 5)} ${m.from}→${m.to}: ${one(m.text)}`).join('\n'));
     }
+    case 'history': {
+      // Reads the file directly, so it works without a running coban too.
+      const limit = num(flags.limit) ?? 50;
+      const r = await call('history', { limit }).catch(() => ({ history: readHistory(limit) }));
+      const hhmm = (ts: number) => { const d = new Date(ts); return `${d.toISOString().slice(5, 10)} ${d.toTimeString().slice(0, 5)}`; };
+      return print(r, () => (r.history.length ? r.history.map((e: any) => e.kind === 'msg'
+        ? `${hhmm(e.ts)} ${e.id}→${e.to}: ${one(e.text)}`
+        : `${hhmm(e.ts)} ${e.id}: ${one(e.text)}${e.detail ? ' — ' + one(e.detail) : ''}`).join('\n') : '(geçmiş boş)'));
+    }
     case 'usage': {
       // Works without a running coban too (then 'limited' is unknown → false).
       const r = await call('usage', {}).catch(() => ({ usage: allUsage(loadConfig()) }));
-      const tok = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
+      const tok = fmtTokens;
       const line = (u: AccountUsage) => !u.limit5h
         ? [u.profileId, 'bilinmiyor', u.limited ? 'LİMİTLİ' : ''].filter(Boolean).join('  ')
         : [u.profileId, `5s ${Math.round(u.pct5h * 100)}% (${tok(u.used5h)}/${tok(u.limit5h)})`, `7g ${tok(u.used7d)}`,
