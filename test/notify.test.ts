@@ -24,6 +24,7 @@ const cfg: Config = {
     { id: 'o', title: 'orch', cmd: sh('sleep 30'), promptArg: '' },
     { id: 'c1', title: 'C1', cmd: sh('echo boom; exit 3'), promptArg: '' },
     { id: 'c2', title: 'C2', cmd: sh('sleep 30'), promptArg: '' },
+    { id: 'o2', title: 'orch2', cmd: `/bin/sh -c 'echo "Do you want to proceed?"; echo "❯ 1. Yes"; echo "  2. No"; sleep 30'`, promptArg: '' },
     { id: 'ok', title: 'OK', cmd: '/bin/sh -c "exit 0"', promptArg: '' },
     { id: 'pm', title: 'PM', cmd: `/bin/sh -c 'echo "Do you want to proceed?"; echo "❯ 1. Yes"; echo "  2. No"; sleep 30'`, promptArg: '' },
   ],
@@ -59,9 +60,26 @@ hub.kill('k');
 await new Promise((r) => setTimeout(r, 800));
 assert.equal(events.length, before, 'no takeover for clean exit or kill');
 
-// Blocked worker → notification.
+// Blocked worker → notification only after notifyDelay of continuous blocked state.
+cfg.notifyDelay = 0.8;
+hub.spawn({ profile: 'o2', role: 'orchestrator', name: 'orch2' });
+await new Promise((r) => setTimeout(r, 1500));
+assert.ok(!notes.some((n) => n.includes('orch2')), 'orchestrator blocks never notify');
+
+hub.spawn({ profile: 'pm', role: 'worker', name: 'quick', task: 'T', cwd });
+await until(() => hub.agents.get('quick')!.status === 'blocked');
+hub.kill('quick'); // leaves blocked state before the delay
+await new Promise((r) => setTimeout(r, 1300));
+assert.ok(!notes.some((n) => n.includes('quick')), 'short blocked → no notification');
+
 hub.spawn({ profile: 'pm', role: 'worker', name: 'pm', task: 'T', cwd });
 await until(() => notes.some((n) => n.includes('pm izin')));
+assert.equal(notes.filter((n) => n.includes('pm izin')).length, 1, 'long blocked → one notification');
+// Same worker+state again within 5 min → suppressed.
+const ag: any = hub.agents.get('pm')!;
+ag.emit('status', 'running'); ag.emit('status', 'blocked');
+await new Promise((r) => setTimeout(r, 1300));
+assert.equal(notes.filter((n) => n.includes('pm izin')).length, 1, 'repeat within 5 min → none');
 
 console.log('notify test OK');
 for (const id of [...hub.order]) hub.kill(id);

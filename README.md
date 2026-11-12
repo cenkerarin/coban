@@ -145,6 +145,20 @@ are just different `CLAUDE_CONFIG_DIR`s:
 `model` is appended as `--model <model>`; `orchestratorModel` overrides it for the profile running as orchestrator —
 coordination is mostly reading and routing, so a cheaper model there saves the most.
 
+## Notifications
+
+On macOS coban shows a notification only when you actually need to act:
+
+- **Blocked worker:** sent only if the worker stays *continuously* blocked for `notifyDelay` seconds (default 20) and
+  its screen still shows a real permission/approval prompt. If the orchestrator or a standing rule answers sooner, nothing
+  appears. The pending notice is cancelled on any status change or kill.
+- **No notice** for the orchestrator's own blocks or for `manual` agents, nor for a blocked screen that is not a
+  recognisable prompt.
+- **Usage limit** (`limited`) notifies immediately (rare).
+- The same agent+state repeats at most once per 5 minutes.
+
+Config: `"notify": false` turns it off, `"notifyDelay": 30` changes the delay (seconds). `COBAN_NO_NOTIFY=1` also disables it.
+
 ## Accounts and limits
 
 `coban usage` (and the bars in the status bar) read each Claude profile's session logs
