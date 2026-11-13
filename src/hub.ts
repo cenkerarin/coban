@@ -12,6 +12,7 @@ import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from '.
 import { addWorktree, checkVerify, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
+const CLEAN_EXIT = [0, 130, 143];
 const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
 
 // What each non-Claude CLI needs to cooperate with coban, added at launch unless the profile already decides it:
@@ -277,7 +278,13 @@ export class Hub extends EventEmitter {
         this.notifyTimers.set(a.id, t);
       }
       // Crashed worker (non-zero exit, not killed through the hub): retake its task once, like a limit handoff.
-      if (s === 'exited' && a.role === 'worker' && a.exitCode !== 0 && !a.handedOff && this.agents.get(a.id) === a) {
+      // User closed it / clean exit (0, SIGINT 130, SIGTERM 143): not a crash. Workers and manual agents are removed shortly after;
+      // the orchestrator stays (the TUI offers a restart).
+      if (s === 'exited' && a.role !== 'orchestrator' && CLEAN_EXIT.includes(a.exitCode as number)) {
+        const t = setTimeout(() => { if (this.agents.get(a.id) === a && a.status === 'exited') { try { this.kill(a.id); } catch {} } }, this.autoRemoveMs);
+        t.unref?.();
+      }
+      if (s === 'exited' && a.role === 'worker' && a.exitCode !== 0 && !CLEAN_EXIT.includes(a.exitCode as number) && !a.handedOff && this.agents.get(a.id) === a) {
         if (DEVIR_ID.test(a.id) || a.task.startsWith(DEVIR_HEAD)) {
           a.handedOff = true; // a takeover worker is never taken over again
           const orch = this.orchestratorId;
@@ -316,6 +323,8 @@ export class Hub extends EventEmitter {
   }
 
   // removeWorktree: also delete the worker's git worktree (kept when it has uncommitted changes; the branch always stays).
+  autoRemoveMs = 1000;
+
   kill(id: string, opts: { removeWorktree?: boolean } = {}): string | undefined {
     if (!this.agents.has(id) && this.queue.some((j) => j.id === id)) {
       this.queue = this.queue.filter((j) => j.id !== id);

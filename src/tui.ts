@@ -280,7 +280,7 @@ export class Tui {
         if (a.status === 'blocked' && id !== hub.orchestratorId) this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
         if (a.status === 'limited') this.event(id, '⧗', STATUS_STYLE.limited[1], 'kullanım limiti doldu');
         if (a.status === 'error') this.event(id, '✗', STATUS_STYLE.error[1], 'çalışamıyor (giriş/sağlayıcı hatası)', a.error);
-        if (a.status === 'exited') this.event(id, '×', DIM, 'süreç kapandı');
+        if (a.status === 'exited') this.event(id, '×', DIM, id === hub.orchestratorId ? 'orkestratör kapandı — Enter ile yeniden başlat / ^b x kaldır' : 'süreç kapandı');
         if (a.status === 'idle' && prev === 'working' && id !== hub.orchestratorId) this.doneCandidates.set(id, now);
         if (a.status === 'idle' && prev === 'starting') this.event(id, '○', DIM, 'hazır');
       }
@@ -355,7 +355,10 @@ export class Tui {
       if (!hub.orchestratorId && (d === '\r' || d === ' ' || d === '+')) this.openPicker('orchestrator');
       return;
     }
-    if (a.exitCode !== null) return;
+    if (a.exitCode !== null) {
+      if (a.role === 'orchestrator' && (d === '\r' || d === '\n')) this.restartOrchestrator(a.id);
+      return;
+    }
     if (!a.term.modes.bracketedPasteMode) d = d.replace(/\x1b\[20[01]~/g, '');
     a.proc.write(d);
   }
@@ -461,6 +464,16 @@ export class Tui {
     try {
       const picked = await this.hub.answer(ap.id, choice, ap.prompt.key);
       this.event(ap.id, choice === 'no' ? '✗' : '✓', choice === 'no' ? STATUS_STYLE.blocked[1] : MARK, `izin: ${picked}`, ap.prompt.body[0] ?? ap.prompt.title);
+    } catch (e: any) { this.flash(e.message); }
+    this.schedule();
+  }
+
+  restartOrchestrator(id: string) {
+    const a = this.hub.agents.get(id);
+    if (!a || a.role !== 'orchestrator' || a.exitCode === null) return;
+    try {
+      this.hub.kill(id);
+      this.hub.setFocus(this.hub.spawn({ profile: a.profile.id, role: 'orchestrator' }).id);
     } catch (e: any) { this.flash(e.message); }
     this.schedule();
   }
@@ -1128,7 +1141,7 @@ export class Tui {
       const pad = ' '.repeat(Math.max(0, Math.floor((W - hint.length) / 2)));
       return plain(y === Math.floor(P / 2) ? pad + hint : '', `0;${DIM}`);
     }
-    if (a.status === 'exited' && y === P - 1) return plain(` süreç kapandı (kod ${a.exitCode}) — ^b x ile kaldır`, '0;7');
+    if (a.status === 'exited' && y === P - 1) return plain(a.role === 'orchestrator' ? ` kapandı (kod ${a.exitCode}) — Enter ile yeniden başlat / ^b x kaldır` : ` süreç kapandı (kod ${a.exitCode}) — ^b x ile kaldır`, '0;7');
     const b = a.term.buffer.active;
     const line = b.getLine(b.viewportY + y);
     if (!line) return ' '.repeat(w);
