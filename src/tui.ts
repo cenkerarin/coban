@@ -66,6 +66,80 @@ const SPINNER = '⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏';
 const CONFIRM_GUARD_MS = 600;
 const FRAME_MS = 80;
 
+// ── living nodes: faces, speech balloons, leaving fade (off with COBAN_NO_ANIM=1 or NO_COLOR) ──
+const EYES = '◐◓◑◒';
+export const DONE_LINES = ['Hallettim ✓', 'Sıradaki!', 'Çayımı alıp geliyorum', 'Tamamdır ✓', 'Bu da bitti'];
+export const HELLO_MS = 1800, DONE_MS = 3000, LEAVE_MS = 700;
+const TYPE_MS = 22, POP_MAX_MS = 450;            // balloon text types itself out, then sits still
+export type Mood = 'hello' | 'happy' | undefined;
+type Balloon = { text: string; kind: 'hello' | 'done' | 'act'; t0: number; until: number };
+type Ghost = { a: Agent; idx: number; t0: number }; // a removed worker still fading out of the graph
+export const animEnabled = (env: NodeJS.ProcessEnv = process.env) =>
+  !(env.COBAN_NO_ANIM && env.COBAN_NO_ANIM !== '0') && !(env.NO_COLOR !== undefined && env.NO_COLOR !== '');
+// A 5–6 cell face per status; working eyes roll, blocked waves, error is sad.
+export function face(status: Status, now: number, seed = 0, mood?: Mood): string {
+  let f: string;
+  if (mood === 'hello') f = '(•‿•)/';
+  else if (mood === 'happy') f = '(^‿^)';
+  else if (status === 'working') { const e = EYES[(Math.floor(now / 180) + seed) % EYES.length]; f = `(${e}‿${e})`; }
+  else if (status === 'blocked') f = Math.floor(now / 450) % 2 ? '\\(°o°)' : '(°o°)/';
+  else f = { starting: '(·_·)', limited: '(-_-)z', error: '(╥_╥)', idle: '(•‿•)', exited: '(-‿-)' }[status];
+  return f;
+}
+// What a working agent is doing, from its screen: the last tool line (Claude "⏺ Read(x)", Codex "• Ran x"),
+// as a short first-person Turkish line ("hub.ts düzenliyorum…"), ≤ ACT_LEN cells. Undefined if nothing to say.
+export const ACT_MS = 8000, ACT_LEN = 35;
+const base = (p: string) => p.trim().replace(/^["'`]|["'`]$/g, '').split(/[\\/]/).filter(Boolean).at(-1) ?? p;
+const clip = (t: string, n = ACT_LEN) => ([...t].length > n ? [...t].slice(0, n - 1).join('') + '…' : t);
+function shellLine(cmd: string): string {
+  const c = cmd.trim().replace(/^(cd \S+ && |env \S+=\S+ |[A-Z_]+=\S+ )+/, '');
+  if (/^coban (post|send)\b/.test(c)) return 'mesaj yazıyorum…';
+  if (/^coban (inbox|board|wait)\b/.test(c)) return 'kutuma bakıyorum…';
+  if (/\b(typecheck|tsc|mypy|pyright)\b/.test(c)) return 'tip kontrolü yapıyorum…';
+  if (/\b(test|tests|jest|vitest|pytest|mocha|playwright|cargo test|go test)\b/.test(c)) return 'testleri koşuyorum…';
+  if (/\bgit (commit|push)\b/.test(c)) return 'commit atıyorum…';
+  if (/\bgit\b/.test(c)) return "git'e bakıyorum…";
+  if (/\b(npm|pnpm|yarn|bun) (i|install|ci|add)\b|\bpip install\b/.test(c)) return 'paket kuruyorum…';
+  if (/\b(build|compile|make)\b/.test(c)) return 'derliyorum…';
+  if (/^(grep|rg|find|ls|cat|sed -n|head|tail)\b/.test(c)) return 'kodu kurcalıyorum…';
+  return `çalıştırıyorum: ${c}`;
+}
+export function activityLine(screen: string): string | undefined {
+  const lines = screen.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    let m = l.match(/^[⏺●]\s*([A-Z][A-Za-z]+)\((.*?)\)?(\s*·.*)?$/); // Claude Code tool call
+    if (m) {
+      const [, tool, arg] = m;
+      const say = ({
+        Read: `${base(arg)} okuyorum…`, Write: `${base(arg)} yazıyorum…`, Edit: `${base(arg)} düzenliyorum…`,
+        Update: `${base(arg)} düzenliyorum…`, MultiEdit: `${base(arg)} düzenliyorum…`, NotebookEdit: `${base(arg)} düzenliyorum…`,
+        Bash: shellLine(arg), Grep: `"${arg.replace(/^pattern:\s*/, '').split(/",|, /)[0].replace(/"/g, '')}" arıyorum…`,
+        Search: `"${arg.split(/",|, /)[0].replace(/^pattern:\s*|"/g, '')}" arıyorum…`, Glob: 'dosyalara bakıyorum…', List: 'dosyalara bakıyorum…',
+        WebFetch: "web'e bakıyorum…", WebSearch: "web'de arıyorum…", Fetch: "web'e bakıyorum…",
+        Task: 'yardımcı agent çalıştırıyorum…', Agent: 'yardımcı agent çalıştırıyorum…', TodoWrite: 'plan yapıyorum…',
+      } as Record<string, string>)[tool];
+      if (say) return clip(say);
+      continue;
+    }
+    m = l.match(/^•\s*(Ran|Running|Edited|Editing|Wrote|Added|Read|Searched|Search)\s+(.+)$/) ?? l.match(/^└\s*(Read|Search|List)\s+(.+)$/); // Codex
+    if (m) {
+      const [, verb, arg] = m;
+      if (verb.startsWith('Ran') || verb === 'Running') return clip(shellLine(arg));
+      if (/^(Edit|Wrote|Added)/.test(verb)) return clip(`${base(arg.split(' (')[0])} düzenliyorum…`);
+      if (verb === 'Read') return clip(`${base(arg.split(',')[0])} okuyorum…`);
+      if (verb === 'List') return 'dosyalara bakıyorum…';
+      return clip(`"${arg}" arıyorum…`);
+    }
+  }
+  return undefined;
+}
+export const doneLine = (summary: string | undefined, rand: () => number) => {
+  const s = summary ? flat(summary) : '';
+  if (s) return `Bitti! ✓ ${s.length > 30 ? s.slice(0, 29) + '…' : s}`;
+  return DONE_LINES[Math.floor(rand() * DONE_LINES.length) % DONE_LINES.length];
+};
+
 // ── per-account usage bars (cached; refreshed every 30 s, never in the render path) ──
 const USAGE_MS = 30_000;
 const usageBarSegs = (u: AccountUsage[], room: number): { segs: Seg[]; len: number } => {
@@ -211,6 +285,13 @@ export class Tui {
   workingSince = new Map<string, number>();
   doneCandidates = new Map<string, number>(); // id → when it went idle after working
   lastLogId = 0;
+  anim = animEnabled();
+  rand = Math.random;
+  balloons = new Map<string, Balloon>();
+  leaving = new Map<string, Ghost>();
+  seen = new Map<string, Agent>();
+  saidDone = new Set<string>();   // a "done" balloon was shown since the agent last started working
+  lastWorkers: string[] = [];
 
   constructor(hub: Hub) {
     this.hub = hub;
@@ -277,8 +358,12 @@ export class Tui {
         this.bornAt.set(id, now);
         const role = a.role === 'orchestrator' ? 'orkestratör' : a.role === 'manual' ? 'manuel agent' : 'işçi';
         this.event(id, '✦', hex(a.profile.color), `${role} açıldı · ${a.profile.title}`, a.task ? flat(a.task.replace(/^\[coban\][\s\S]*?GÖREV:\s*/, '')) : undefined);
+        this.leaving.delete(id);
+        if (a.role !== 'orchestrator') this.say(id, 'Merhaba!', 'hello', now);
       } else if (prev !== a.status) {
-        if (a.status === 'working') { this.workingSince.set(id, now); this.doneCandidates.delete(id); }
+        if (prev === 'working' && this.balloons.get(id)?.kind === 'act') this.balloons.delete(id);
+        if (a.status === 'working') { this.workingSince.set(id, now); this.doneCandidates.delete(id); this.saidDone.delete(id); }
+        if (a.status === 'exited' && a.exitCode === 0 && a.role !== 'orchestrator') this.sayDone(id, now);
         if (a.status === 'blocked' && id !== hub.orchestratorId) this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
         if (a.status === 'limited') this.event(id, '⧗', STATUS_STYLE.limited[1], 'kullanım limiti doldu');
         if (a.status === 'error') this.event(id, '✗', STATUS_STYLE.error[1], 'çalışamıyor (giriş/sağlayıcı hatası)', a.error);
@@ -287,10 +372,12 @@ export class Tui {
         if (a.status === 'idle' && prev === 'starting') this.event(id, '○', DIM, 'hazır');
       }
       this.lastStatus.set(id, a.status);
+      this.seen.set(id, a);
     }
     for (const id of [...this.lastStatus.keys()]) {
-      if (!hub.agents.has(id)) { this.lastStatus.delete(id); this.doneCandidates.delete(id); this.event(id, '×', DIM, 'kapatıldı'); }
+      if (!hub.agents.has(id)) { this.lastStatus.delete(id); this.doneCandidates.delete(id); this.event(id, '×', DIM, 'kapatıldı'); this.leave(id, now); }
     }
+    this.lastWorkers = hub.order.filter((id) => hub.agents.get(id)?.role !== 'orchestrator');
     // new messages → packets travelling along the graph
     for (const m of hub.log) {
       if (m.id <= this.lastLogId) continue;
@@ -313,12 +400,71 @@ export class Tui {
       this.doneCandidates.delete(id);
       const took = this.workingSince.has(id) ? Math.round((at - this.workingSince.get(id)!) / 1000) : 0;
       this.event(id, '✓', MARK, took >= 5 ? `durdu · ${took} sn çalıştı` : 'durdu');
+      this.sayDone(id, this.now);
     }
   }
+
+  // ── speech balloons + leaving fade ─────────────────────────────
+  say(id: string, text: string, kind: Balloon['kind'], at: number) {
+    if (!this.anim) return;
+    const until = at + (kind === 'hello' ? HELLO_MS : kind === 'act' ? ACT_MS + 2000 : DONE_MS);
+    this.balloons.set(id, { text, kind, t0: at, until });
+    this.wake(until);
+  }
+
+  // The worker's report to the orchestrator since it last started working, else a line from the pool.
+  sayDone(id: string, at: number) {
+    if (this.saidDone.has(id)) return;
+    this.saidDone.add(id);
+    const since = this.workingSince.get(id) ?? 0, orch = this.hub.orchestratorId;
+    const rep = [...this.hub.log].reverse().find((m) => m.from === id && m.to === orch && m.ts >= since);
+    this.say(id, doneLine(rep?.text, this.rand), 'done', at);
+  }
+
+  // A removed worker stays in the graph until its balloon is gone, then fades and shrinks out (fade-in reversed).
+  leave(id: string, at: number) {
+    const a = this.seen.get(id);
+    this.seen.delete(id); this.saidDone.delete(id); this.actCheck.delete(id);
+    if (!this.anim || !a || a.role === 'orchestrator') { this.balloons.delete(id); return; }
+    const t0 = Math.max(at, this.balloons.get(id)?.until ?? at);
+    this.leaving.set(id, { a, idx: Math.max(0, this.lastWorkers.indexOf(id)), t0 });
+    this.wake(t0);
+  }
+
+  // While working, a worker narrates its last action. A shown line stays at least ACT_MS; with nothing on
+  // show the screen is read about once a second. Never talks over a hello/done balloon.
+  actCheck = new Map<string, number>();
+  narrate() {
+    if (!this.anim) return;
+    for (const a of this.hub.agents.values()) {
+      if (a.role === 'orchestrator' || a.status !== 'working') continue;
+      const b = this.balloons.get(a.id);
+      if (b && (b.kind !== 'act' || this.now - b.t0 < ACT_MS)) continue;
+      if (this.now - (this.actCheck.get(a.id) ?? 0) < 1000) continue;
+      this.actCheck.set(a.id, this.now);
+      const text = activityLine(a.screenText(24));
+      if (text && text === b?.text) { b.until = this.now + ACT_MS + 2000; this.wake(b.until); } // same action: keep it up, no re-typing
+      else if (text) this.say(a.id, text, 'act', this.now);
+    }
+  }
+
+  prune() {
+    for (const [id, b] of this.balloons) if (this.now >= b.until) this.balloons.delete(id);
+    for (const [id, g] of this.leaving) if (this.now >= g.t0 + LEAVE_MS || this.hub.agents.has(id)) this.leaving.delete(id);
+  }
+
+  // A static balloon needs no frames; one timer redraws when it is due to change.
+  wake(at: number) {
+    setTimeout(() => this.schedule(), Math.max(0, at - Date.now()) + 5).unref?.();
+  }
+
+  popMs(b: Balloon) { return Math.min(POP_MAX_MS, [...b.text].length * TYPE_MS); }
 
   animating(): boolean {
     const now = this.now;
     if (this.packets.length || this.doneCandidates.size) return true;
+    for (const b of this.balloons.values()) if (now >= b.t0 && now < b.t0 + this.popMs(b)) return true;
+    for (const g of this.leaving.values()) if (now >= g.t0 && now < g.t0 + LEAVE_MS) return true;
     for (const a of this.hub.agents.values()) if (a.status === 'working' || a.status === 'starting' || a.status === 'blocked') return true;
     for (const t of this.bornAt.values()) if (now - t < 800) return true;
     for (const t of this.arrivedAt.values()) if (now - t < 700) return true;
@@ -637,7 +783,7 @@ export class Tui {
     const [, color] = STATUS_STYLE[a.status];
     const pc = hex(a.profile.color);
     const id: Seg = [' ' + a.id, (a.id === this.hub.focus ? '1;' : '') + (level === 'mini' ? pc : '39')];
-    const head: Seg[] = [[this.glyph(a), color], id, [this.marks(a), MARK]];
+    const head: Seg[] = [[this.faces(level) ? face(a.status, this.now, hash(a.id), this.mood(a.id)) : this.glyph(a), color], id, [this.marks(a), MARK]];
     if (level === 'mini') return [head];
     if (level === 'compact') return [[...head, [' ' + a.profile.title, pc]]];
     const st = this.stats.get(a.id);
@@ -645,9 +791,15 @@ export class Tui {
     return [head, [[a.profile.title, pc], [' · ' + this.label(a), DIM], ...tok]];
   }
 
+  faces(level: Level) { return this.anim && level === 'full'; } // narrow bubbles keep the one-cell glyph
+  mood(id: string): Mood {
+    const b = this.balloons.get(id);
+    return b && b.kind !== 'act' ? (b.kind === 'hello' ? 'hello' : 'happy') : this.leaving.has(id) ? 'happy' : undefined;
+  }
+
   // Width a worker bubble needs, sized for its longest status label so bubbles don't jitter.
   workerWidth(a: Agent, level: Level): number {
-    const head = 2 + a.id.length + 6;
+    const head = (this.faces(level) ? 7 : 2) + a.id.length + 6;
     if (level === 'mini') return head;
     if (level === 'compact') return head + 1 + a.profile.title.length;
     return Math.max(head, a.profile.title.length + 3 + Math.max(...Object.values(STATUS_STYLE).map(([, , l]) => l.length)) + 3 + (a.profile.cmd.startsWith('claude') ? 13 : 0));
@@ -669,6 +821,9 @@ export class Tui {
   plan(W: number, H: number, full: boolean): Plan {
     const hub = this.hub;
     const workers = hub.order.map((id) => hub.agents.get(id)!).filter((a) => a.role !== 'orchestrator');
+    for (const [id, g] of [...this.leaving].sort((x, y) => x[1].idx - y[1].idx)) {
+      if (!hub.agents.has(id)) workers.splice(Math.min(g.idx, workers.length), 0, g.a);
+    }
     const n = workers.length + (hub.order.length ? 1 : 0); // + the "add worker" bubble
     const capG = full ? H - 1 : Math.max(3, Math.min(Math.max(7, Math.round(H * 0.3)), H - 8));
     const cx = Math.floor(W / 2);
@@ -712,6 +867,7 @@ export class Tui {
     const used = p.bh + p.rows * (p.bh + 1);
     const top = Math.max(0, Math.floor(((full ? p.G + 1 : p.G) - used) / 2));
     const num = (id: string) => String(hub.order.indexOf(id) + 1);
+    const spots: { id: string; ax: number; y: number }[] = [];
 
     // root: the orchestrator (double-line gold box)
     const orch = hub.agents.get(hub.orchestratorId);
@@ -749,12 +905,18 @@ export class Tui {
         row.forEach((it, i) => {
           const x = xs[i], y = busY + 1, ax = anchors[i];
           c.vline(ax, busY, y);
-          if (it.kind === 'agent') {
+          const ghost = it.kind === 'agent' ? this.leaving.get(it.a.id) : undefined;
+          if (it.kind === 'agent' && ghost) {
+            spots.push({ id: it.a.id, ax, y });
+            this.ghostBox(c, it.a, ghost, x, y, p, ax);
+          } else if (it.kind === 'agent') {
             const a = it.a, focus = a.id === hub.focus;
             this.nodes.set(a.id, { ax, ay: y, bus: busY });
+            spots.push({ id: a.id, ax, y });
             this.box(c, x, y, p.bw, p.bh, this.workerLines(a, p.level), {
               style: focus ? 'heavy' : 'round', color: this.tint(a, rgbOf(a.profile.color) ?? [200, 200, 200], focus),
               bg: focus ? ';48;5;236' : '', label: num(a.id), hit: { kind: 'agent', id: a.id }, joint: ax,
+              tag: this.faces(p.level) && a.status === 'working' ? ['yazıyor' + '.'.repeat(Math.floor(this.now / 300) % 4), DIM] : undefined,
             });
           } else if (it.kind === 'more') {
             this.box(c, x, y, p.bw, p.bh, [[[p.level === 'mini' ? `… +${it.n}` : `… +${it.n} işçi`, DIM]]], {
@@ -771,6 +933,13 @@ export class Tui {
       }
     }
     this.drawPackets(c);
+    if (this.anim && p.level !== 'mini') {
+      const maxY = full ? c.h - 1 : p.G - 1;
+      for (const s of spots) {
+        const b = this.balloons.get(s.id);
+        if (b && this.now >= b.t0) this.balloon(c, b, s.ax, s.y + p.bh <= maxY ? s.y + p.bh : s.y - 1, s.y + p.bh <= maxY, rgbOf(this.hub.agents.get(s.id)?.profile.color ?? this.leaving.get(s.id)?.a.profile.color));
+      }
+    }
 
     if (full) {
       if (!hub.orchestratorId) c.segs(0, Math.min(p.G, top + p.bh + 1), W, [['+ baloncuğuna tıkla ya da Enter\'a bas', DIM]], '');
@@ -824,8 +993,31 @@ export class Tui {
     this.packets = live;
   }
 
+  // One-row speech balloon under (or, without room, above) a node, typing itself out: "▴ Hallettim ✓ ".
+  balloon(c: Canvas, b: Balloon, ax: number, y: number, below: boolean, color: RGB | null) {
+    const chars = [...b.text];
+    const shown = chars.slice(0, Math.max(1, Math.floor((this.now - b.t0) / (this.popMs(b) / chars.length || 1)))).join('');
+    let text = `${below ? '▴' : '▾'} ${shown} `;
+    if ([...text].length > c.w) text = [...text].slice(0, Math.max(0, c.w - 1)).join('') + '…';
+    const len = [...text].length;
+    const x = clamp(ax - 1, 0, Math.max(0, c.w - len));
+    c.put(x, y, text, `0;${b.kind === 'done' ? '1;' : b.kind === 'act' ? '3;' : ''}${fg(color ?? GOLD_RGB)};48;5;236`);
+  }
+
+  // A removed worker: dims, then shrinks towards its joint and fades into the background.
+  ghostBox(c: Canvas, a: Agent, g: Ghost, x: number, y: number, p: Plan, ax: number) {
+    const t = clamp((this.now - g.t0) / LEAVE_MS, 0, 1);
+    const base = rgbOf(a.profile.color) ?? [200, 200, 200];
+    const w = Math.max(4, Math.round(p.bw * (1 - 0.6 * t)));
+    const gx = clamp(ax - Math.floor(w / 2), x, x + p.bw - w);
+    this.box(c, gx, y, w, p.bh, t < 0.35 ? this.workerLines(a, p.level) : [], {
+      style: 'round', color: fg(mix(base, BG_RGB, 0.3 + 0.7 * t)), bg: '', label: '', hit: { kind: 'agent', id: a.id }, joint: ax,
+    });
+    this.hits.pop(); // not clickable: the agent is gone
+  }
+
   box(c: Canvas, x: number, y: number, w: number, h: number, lines: Seg[][],
-      o: { style: 'round' | 'heavy' | 'double' | 'dash'; color: string; bg: string; label: string; hit: Hit; joint?: number }) {
+      o: { style: 'round' | 'heavy' | 'double' | 'dash'; color: string; bg: string; label: string; hit: Hit; joint?: number; tag?: Seg }) {
     const k = {
       round: ['╭', '╮', '╰', '╯', '─', '│', '┸'],
       heavy: ['┏', '┓', '┗', '┛', '━', '┃', '┻'],
@@ -836,6 +1028,8 @@ export class Tui {
     c.put(x, y, k[0] + k[4].repeat(Math.max(0, w - 2)) + k[1], bs);
     if (o.label) c.put(x + 2, y, o.label, `0;${DIM}`);
     if (o.joint !== undefined) c.put(o.joint, y, k[6], bs);
+    const tx = o.tag ? x + w - 2 - [...o.tag[0].replace(/\.+$/, '')].length - 3 : 0; // fixed start (dots grow), clear of the joint
+    if (o.tag && tx > (o.joint ?? x + 2 + o.label.length) + 1) c.put(tx, y, o.tag[0], `0;${o.tag[1]}`);
     const inner = h - 2;
     const start = Math.floor((inner - lines.length) / 2);
     for (let i = 0; i < inner; i++) {
@@ -1046,6 +1240,8 @@ export class Tui {
     const W = out.columns, H = out.rows;
     this.now = Date.now();
     this.settleDone();
+    this.prune();
+    this.narrate();
     const L = this.layout(W, H);
     this.geo = L;
     if (hub.size.cols !== L.pw || hub.size.rows !== L.P) hub.resizeAll(L.pw, L.P);

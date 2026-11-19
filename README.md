@@ -60,6 +60,12 @@ least-spent one.
   run a shell command can take part.
 - **Alive, not busy.** Messages travel along the edges as packets (board notes fan out to everyone), working agents
   breathe, blocked ones blink, new ones fade in. Frames are drawn only while something moves.
+- **Faces and balloons.** Worker bubbles wear a face: eyes roll while working (with a `yazıyor…` tag), a hand
+  waves on a permission prompt, `(╥_╥)` on an error. While working it narrates its last tool call from its screen
+  (`hub.ts düzenliyorum…`, `testleri koşuyorum…`, at most every 8 s). A new worker says `Merhaba!`; one that finishes (idle after
+  work, or a clean exit) says `Bitti! ✓ <the start of its report>` or a line like `Hallettim ✓` for ~3 s, and a
+  removed one shrinks and fades out of the graph. Narrow bubbles keep the one-cell glyph; `COBAN_NO_ANIM=1` or
+  `NO_COLOR` turns all of this off. A balloon that sits still costs no frames.
 
 ```
 coban agents                                   agents, model, status
