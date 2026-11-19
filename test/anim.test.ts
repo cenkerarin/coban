@@ -3,7 +3,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
-import { Tui, face, doneLine, animEnabled, DONE_LINES, DONE_MS, HELLO_MS, LEAVE_MS } from '../src/tui.ts';
+import { Tui, face, doneLine, activityLine, animEnabled, ACT_MS, DONE_LINES, DONE_MS, HELLO_MS, LEAVE_MS } from '../src/tui.ts';
 import type { Agent, Msg, Status } from '../src/agent.ts';
 import type { Hub } from '../src/hub.ts';
 
@@ -12,7 +12,7 @@ const strip = (s: string) => s.replace(/\x1b\[[0-9;?]*[a-zA-Z]/g, '');
 
 function fakeAgent(id: string, role: Agent['role'], status: Status = 'starting'): Agent {
   return {
-    id, role, status, task: '', exitCode: null, inbox: [], unread: false, error: undefined, model: '',
+    id, role, status, task: '', exitCode: null, screen: '', screenText() { return (this as { screen: string }).screen; }, inbox: [], unread: false, error: undefined, model: '',
     profile: { id: 'p', title: 'Fake', color: '#88aaff', cmd: 'fake' },
   } as unknown as Agent;
 }
@@ -150,3 +150,48 @@ function widths(txt: string): number {
   const row = txt.split('\n').find((l) => /╰[─]*╯/.test(l)) ?? '';
   return (row.match(/╰─*╯/) ?? [''])[0].length;
 }
+
+test('activityLine: the last tool line as a short first-person line', () => {
+  const claude = (l: string) => `⏺ İşe bakıyorum.\n\n${l}\n  ⎿  Read 120 lines\n\n✻ Çalışıyor… (esc to interrupt)`;
+  assert.equal(activityLine(claude('⏺ Read(src/api.ts)')), 'api.ts okuyorum…');
+  assert.equal(activityLine(claude('⏺ Update(src/hub.ts)')), 'hub.ts düzenliyorum…');
+  assert.equal(activityLine(claude('● Write(test/anim.test.ts)')), 'anim.test.ts yazıyorum…');
+  assert.equal(activityLine(claude('⏺ Bash(npm test 2>&1 | tail -5)')), 'testleri koşuyorum…');
+  assert.equal(activityLine(claude('⏺ Bash(npm run typecheck)')), 'tip kontrolü yapıyorum…');
+  assert.equal(activityLine(claude('⏺ Bash(git commit -m "x")')), 'commit atıyorum…');
+  assert.equal(activityLine(claude('⏺ Bash(coban post all "hub.ts: yeni olay")')), 'mesaj yazıyorum…');
+  assert.equal(activityLine(claude('⏺ Search(pattern: "animating", path: "src")')), '"animating" arıyorum…');
+  assert.equal(activityLine(claude('⏺ Bash(node scripts/a-very-long-script-name.mjs --with --flags)')), 'çalıştırıyorum: node scripts/a-ver…');
+  assert.equal(activityLine('• Ran npm test\n  └ 60 passed'), 'testleri koşuyorum…');            // codex
+  assert.equal(activityLine('• Edited src/tui.ts (+12 -3)'), 'tui.ts düzenliyorum…');
+  assert.equal(activityLine('• Explored\n  └ Read tui.ts, hub.ts'), 'tui.ts okuyorum…');
+  assert.equal(activityLine('⏺ Merhaba, işe başlıyorum.\n> komut'), undefined, 'plain replies say nothing');
+  for (const l of ['⏺ Read(src/a-really-long-directory/with-an-even-longer-file-name-here.ts)', '⏺ Bash(make all)']) {
+    assert.ok([...(activityLine(l) ?? '')].length <= 35, l);
+  }
+});
+
+test('working workers narrate their last action, at most every 8 s, never over a done balloon', () => {
+  const { hub, tui, add, at, draw } = setup();
+  const w = add(fakeAgent('api', 'worker')) as Agent & { screen: string };
+  tui.observe();
+  w.status = 'working'; tui.observe();
+  w.screen = '⏺ Read(src/api.ts)';
+  at(500); tui.narrate();
+  assert.equal(tui.balloons.get('api')?.kind, 'hello', 'does not talk over its hello');
+  at(HELLO_MS + 100); tui.narrate();
+  assert.equal(tui.balloons.get('api')?.text, 'api.ts okuyorum…');
+  at(HELLO_MS + 1500);
+  assert.match(draw(), /▴ api\.ts okuyorum…/);
+  assert.match(draw(), /\([◐◓◑◒]‿[◐◓◑◒]\) api/, 'face keeps rolling while narrating');
+  w.screen += '\n⏺ Update(src/hub.ts)';
+  at(HELLO_MS + 4000); tui.narrate();
+  assert.equal(tui.balloons.get('api')?.text, 'api.ts okuyorum…', 'held for ACT_MS');
+  at(HELLO_MS + 100 + ACT_MS); tui.narrate();
+  assert.equal(tui.balloons.get('api')?.text, 'hub.ts düzenliyorum…');
+  hub.log.push({ id: 1, from: 'api', to: 'orkestra', text: 'hub.ts bitti', ts: Date.now() } as Msg);
+  w.status = 'idle'; tui.observe();
+  assert.equal(tui.balloons.has('api'), false, 'stops narrating when it stops working');
+  at(HELLO_MS + ACT_MS + 3000); tui.settleDone();
+  assert.equal(tui.balloons.get('api')?.text, 'Bitti! ✓ hub.ts bitti');
+});

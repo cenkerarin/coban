@@ -72,7 +72,7 @@ export const DONE_LINES = ['Hallettim ✓', 'Sıradaki!', 'Çayımı alıp geliy
 export const HELLO_MS = 1800, DONE_MS = 3000, LEAVE_MS = 700;
 const TYPE_MS = 22, POP_MAX_MS = 450;            // balloon text types itself out, then sits still
 export type Mood = 'hello' | 'happy' | undefined;
-type Balloon = { text: string; kind: 'hello' | 'done'; t0: number; until: number };
+type Balloon = { text: string; kind: 'hello' | 'done' | 'act'; t0: number; until: number };
 type Ghost = { a: Agent; idx: number; t0: number }; // a removed worker still fading out of the graph
 export const animEnabled = (env: NodeJS.ProcessEnv = process.env) =>
   !(env.COBAN_NO_ANIM && env.COBAN_NO_ANIM !== '0') && !(env.NO_COLOR !== undefined && env.NO_COLOR !== '');
@@ -85,6 +85,54 @@ export function face(status: Status, now: number, seed = 0, mood?: Mood): string
   else if (status === 'blocked') f = Math.floor(now / 450) % 2 ? '\\(°o°)' : '(°o°)/';
   else f = { starting: '(·_·)', limited: '(-_-)z', error: '(╥_╥)', idle: '(•‿•)', exited: '(-‿-)' }[status];
   return f;
+}
+// What a working agent is doing, from its screen: the last tool line (Claude "⏺ Read(x)", Codex "• Ran x"),
+// as a short first-person Turkish line ("hub.ts düzenliyorum…"), ≤ ACT_LEN cells. Undefined if nothing to say.
+export const ACT_MS = 8000, ACT_LEN = 35;
+const base = (p: string) => p.trim().replace(/^["'`]|["'`]$/g, '').split(/[\\/]/).filter(Boolean).at(-1) ?? p;
+const clip = (t: string, n = ACT_LEN) => ([...t].length > n ? [...t].slice(0, n - 1).join('') + '…' : t);
+function shellLine(cmd: string): string {
+  const c = cmd.trim().replace(/^(cd \S+ && |env \S+=\S+ |[A-Z_]+=\S+ )+/, '');
+  if (/^coban (post|send)\b/.test(c)) return 'mesaj yazıyorum…';
+  if (/^coban (inbox|board|wait)\b/.test(c)) return 'kutuma bakıyorum…';
+  if (/\b(typecheck|tsc|mypy|pyright)\b/.test(c)) return 'tip kontrolü yapıyorum…';
+  if (/\b(test|tests|jest|vitest|pytest|mocha|playwright|cargo test|go test)\b/.test(c)) return 'testleri koşuyorum…';
+  if (/\bgit (commit|push)\b/.test(c)) return 'commit atıyorum…';
+  if (/\bgit\b/.test(c)) return "git'e bakıyorum…";
+  if (/\b(npm|pnpm|yarn|bun) (i|install|ci|add)\b|\bpip install\b/.test(c)) return 'paket kuruyorum…';
+  if (/\b(build|compile|make)\b/.test(c)) return 'derliyorum…';
+  if (/^(grep|rg|find|ls|cat|sed -n|head|tail)\b/.test(c)) return 'kodu kurcalıyorum…';
+  return `çalıştırıyorum: ${c}`;
+}
+export function activityLine(screen: string): string | undefined {
+  const lines = screen.split('\n');
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const l = lines[i].trim();
+    let m = l.match(/^[⏺●]\s*([A-Z][A-Za-z]+)\((.*?)\)?(\s*·.*)?$/); // Claude Code tool call
+    if (m) {
+      const [, tool, arg] = m;
+      const say = ({
+        Read: `${base(arg)} okuyorum…`, Write: `${base(arg)} yazıyorum…`, Edit: `${base(arg)} düzenliyorum…`,
+        Update: `${base(arg)} düzenliyorum…`, MultiEdit: `${base(arg)} düzenliyorum…`, NotebookEdit: `${base(arg)} düzenliyorum…`,
+        Bash: shellLine(arg), Grep: `"${arg.replace(/^pattern:\s*/, '').split(/",|, /)[0].replace(/"/g, '')}" arıyorum…`,
+        Search: `"${arg.split(/",|, /)[0].replace(/^pattern:\s*|"/g, '')}" arıyorum…`, Glob: 'dosyalara bakıyorum…', List: 'dosyalara bakıyorum…',
+        WebFetch: "web'e bakıyorum…", WebSearch: "web'de arıyorum…", Fetch: "web'e bakıyorum…",
+        Task: 'yardımcı agent çalıştırıyorum…', Agent: 'yardımcı agent çalıştırıyorum…', TodoWrite: 'plan yapıyorum…',
+      } as Record<string, string>)[tool];
+      if (say) return clip(say);
+      continue;
+    }
+    m = l.match(/^•\s*(Ran|Running|Edited|Editing|Wrote|Added|Read|Searched|Search)\s+(.+)$/) ?? l.match(/^└\s*(Read|Search|List)\s+(.+)$/); // Codex
+    if (m) {
+      const [, verb, arg] = m;
+      if (verb.startsWith('Ran') || verb === 'Running') return clip(shellLine(arg));
+      if (/^(Edit|Wrote|Added)/.test(verb)) return clip(`${base(arg.split(' (')[0])} düzenliyorum…`);
+      if (verb === 'Read') return clip(`${base(arg.split(',')[0])} okuyorum…`);
+      if (verb === 'List') return 'dosyalara bakıyorum…';
+      return clip(`"${arg}" arıyorum…`);
+    }
+  }
+  return undefined;
 }
 export const doneLine = (summary: string | undefined, rand: () => number) => {
   const s = summary ? flat(summary) : '';
@@ -311,6 +359,7 @@ export class Tui {
         this.leaving.delete(id);
         if (a.role !== 'orchestrator') this.say(id, 'Merhaba!', 'hello', now);
       } else if (prev !== a.status) {
+        if (prev === 'working' && this.balloons.get(id)?.kind === 'act') this.balloons.delete(id);
         if (a.status === 'working') { this.workingSince.set(id, now); this.doneCandidates.delete(id); this.saidDone.delete(id); }
         if (a.status === 'exited' && a.exitCode === 0 && a.role !== 'orchestrator') this.sayDone(id, now);
         if (a.status === 'blocked' && id !== hub.orchestratorId) this.event(id, '!', STATUS_STYLE.blocked[1], 'izin bekliyor');
@@ -356,7 +405,7 @@ export class Tui {
   // ── speech balloons + leaving fade ─────────────────────────────
   say(id: string, text: string, kind: Balloon['kind'], at: number) {
     if (!this.anim) return;
-    const until = at + (kind === 'hello' ? HELLO_MS : DONE_MS);
+    const until = at + (kind === 'hello' ? HELLO_MS : kind === 'act' ? ACT_MS + 2000 : DONE_MS);
     this.balloons.set(id, { text, kind, t0: at, until });
     this.wake(until);
   }
@@ -373,11 +422,28 @@ export class Tui {
   // A removed worker stays in the graph until its balloon is gone, then fades and shrinks out (fade-in reversed).
   leave(id: string, at: number) {
     const a = this.seen.get(id);
-    this.seen.delete(id); this.saidDone.delete(id);
+    this.seen.delete(id); this.saidDone.delete(id); this.actCheck.delete(id);
     if (!this.anim || !a || a.role === 'orchestrator') { this.balloons.delete(id); return; }
     const t0 = Math.max(at, this.balloons.get(id)?.until ?? at);
     this.leaving.set(id, { a, idx: Math.max(0, this.lastWorkers.indexOf(id)), t0 });
     this.wake(t0);
+  }
+
+  // While working, a worker narrates its last action. A shown line stays at least ACT_MS; with nothing on
+  // show the screen is read about once a second. Never talks over a hello/done balloon.
+  actCheck = new Map<string, number>();
+  narrate() {
+    if (!this.anim) return;
+    for (const a of this.hub.agents.values()) {
+      if (a.role === 'orchestrator' || a.status !== 'working') continue;
+      const b = this.balloons.get(a.id);
+      if (b && (b.kind !== 'act' || this.now - b.t0 < ACT_MS)) continue;
+      if (this.now - (this.actCheck.get(a.id) ?? 0) < 1000) continue;
+      this.actCheck.set(a.id, this.now);
+      const text = activityLine(a.screenText(24));
+      if (text && text === b?.text) { b.until = this.now + ACT_MS + 2000; this.wake(b.until); } // same action: keep it up, no re-typing
+      else if (text) this.say(a.id, text, 'act', this.now);
+    }
   }
 
   prune() {
@@ -726,7 +792,7 @@ export class Tui {
   faces(level: Level) { return this.anim && level === 'full'; } // narrow bubbles keep the one-cell glyph
   mood(id: string): Mood {
     const b = this.balloons.get(id);
-    return b ? (b.kind === 'hello' ? 'hello' : 'happy') : this.leaving.has(id) ? 'happy' : undefined;
+    return b && b.kind !== 'act' ? (b.kind === 'hello' ? 'hello' : 'happy') : this.leaving.has(id) ? 'happy' : undefined;
   }
 
   // Width a worker bubble needs, sized for its longest status label so bubbles don't jitter.
@@ -933,7 +999,7 @@ export class Tui {
     if ([...text].length > c.w) text = [...text].slice(0, Math.max(0, c.w - 1)).join('') + '…';
     const len = [...text].length;
     const x = clamp(ax - 1, 0, Math.max(0, c.w - len));
-    c.put(x, y, text, `0;${b.kind === 'done' ? '1;' : ''}${fg(color ?? GOLD_RGB)};48;5;236`);
+    c.put(x, y, text, `0;${b.kind === 'done' ? '1;' : b.kind === 'act' ? '3;' : ''}${fg(color ?? GOLD_RGB)};48;5;236`);
   }
 
   // A removed worker: dims, then shrinks towards its joint and fades into the background.
@@ -1173,6 +1239,7 @@ export class Tui {
     this.now = Date.now();
     this.settleDone();
     this.prune();
+    this.narrate();
     const L = this.layout(W, H);
     this.geo = L;
     if (hub.size.cols !== L.pw || hub.size.rows !== L.P) hub.resizeAll(L.pw, L.P);
