@@ -37,6 +37,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban log [--limit n]
   coban history [--limit n]           kalıcı oturum geçmişi (olaylar + mesajlar, ~/.coban/history.jsonl)
   coban account add                   yeni Claude hesabı ekle: giriş yaptırır, profili config'e yazar (arayüz kapalıyken)
+  coban doctor [--json]                 ortam kontrolü: Node, config, profil komutları, Claude girişi, soket, git (hata varsa çıkış 1)
 
 spawn/approve/key/kill/rule agent dışından (bu terminalden) çalıştırılınca coban penceresinde onay ister: y onayla, n reddet.
 Her komut --json ile ham çıktı verir.`;
@@ -104,6 +105,13 @@ async function main() {
     appendProfile(profile);
     console.log(`\n${profile.id} eklendi (${CONFIG_PATH}). Arayüzü yeniden aç: coban`);
     return;
+  }
+
+  if (cmd === 'doctor') {
+    const { runDoctor, formatDoctor, doctorFailed } = await import('./doctor.ts');
+    const checks = await runDoctor();
+    console.log(flags.json ? JSON.stringify(checks) : formatDoctor(checks));
+    process.exit(doctorFailed(checks) ? 1 : 0);
   }
 
   if (!cmd || cmd === '--cwd') {
