@@ -76,6 +76,7 @@ coban approvals                                agents waiting on a permission qu
 coban approve <id> [yes|always|no]             answer it (always = the "Yes, and …" option)
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
 coban usage                                    per-account usage, least spent first
+coban doctor [--json]                          check Node, config, profile CLIs, Claude logins, socket, git (exit 1 on failure)
 coban kill <id> · coban log                    every command takes --json
 ```
 
@@ -99,6 +100,8 @@ profile is written to the config. Restart coban to see it. Edit the file any tim
 Note: the prompts coban gives the orchestrator and workers, and `coban --help`, are currently in Turkish.
 
 ### Troubleshooting
+
+Run `coban doctor` first: it checks Node, the config, each profile's CLI on `PATH`, Claude login dirs, the socket and git, and suggests a fix per line.
 
 | symptom | fix |
 |---|---|
