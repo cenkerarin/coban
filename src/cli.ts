@@ -130,7 +130,7 @@ async function main() {
   const one = (s: string) => s.replace(/\s+/g, ' ').trim();
   const usageTag = (u: any) => `tok=${fmtTokens(u.tokens)}` + (u.remainPct === undefined ? '' : ` kalan=%${Math.round(u.remainPct * 100)}${u.etaMs === null ? '' : ' ' + fmtEta(u.etaMs)}`);
   const agentLine = (a: any) =>
-    [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : a.role === 'manual' ? 'manuel' : '', a.status,
+    [a.id, `${a.profile}${a.model ? '/' + short(a.model) : ''}`, a.role === 'orchestrator' ? '★' : a.role === 'manual' ? 'manuel' : '', a.status + (a.stuckMin ? ` (takıldı ${a.stuckMin}dk)` : ''),
       a.unreadMessages ? `✉${a.unreadMessages}` : '', a.usage ? usageTag(a.usage) : '', a.verify ? `doğrulama:${a.verify}` : '', a.boardUnread ? `▤${a.boardUnread}` : '', a.cwd ? `cwd=${a.cwd}` : '', a.task ? `"${a.task}"` : '']
       .filter(Boolean).join('  ');
 

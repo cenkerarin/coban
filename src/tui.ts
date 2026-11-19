@@ -225,6 +225,8 @@ export class Tui {
       else this.event(h.from, '⇄', STATUS_STYLE.limited[1], `devir yapılamadı${h.toProfile ? ` (${h.toProfile})` : ': uygun hesap yok'}`);
       this.usageAt = 0; this.schedule();
     });
+    hub.on('stuck', (s: { id: string; minutes: number }) => this.event(s.id, '⌛', STATUS_STYLE.blocked[1], `takıldı · ${s.minutes} dk ekran değişmedi`));
+    hub.on('unstuck', (s: { id: string }) => this.event(s.id, '●', STATUS_STYLE.working[1], 'yeniden ilerliyor'));
     hub.on('notify', (m: Msg) => this.flash(`✉ ${m.from}: ${flat(m.text)}`, 15000));
   }
 

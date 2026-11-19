@@ -148,6 +148,14 @@ function ensureReportsDir(cwd: string) {
   } catch {}
 }
 
+// Watchdog: what of a working agent's screen counts as progress. Spinners, elapsed-time/token counters and
+// "esc to interrupt" lines redraw forever even when nothing happens, so they are left out of the comparison.
+const STUCK_NOISE = /esc to (interrupt|cancel)|ctrl\+c to (interrupt|stop)|Working \(|Thinking|^\s*[✻✶✳✢✽·*⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏◐◓◑◒]\s|\(\s*\d+(\.\d+)?\s*[smh]\b|\d+\s*tokens/i;
+export function progressKey(screen: string): string {
+  return compactScreen(screen, 40).split('\n').filter((l) => !STUCK_NOISE.test(l)).join('\n');
+}
+type Watch = { key: string; since: number; reported: boolean };
+
 const DEVIR_HEAD = 'DEVİR:';
 const DEVIR_ID = /-devir(-\d+)?$/;
 
@@ -202,7 +210,7 @@ export class Hub extends EventEmitter {
   constructor(cfg: Config) {
     super();
     this.cfg = cfg;
-    setInterval(() => { for (const a of this.agents.values()) a.tick(); this.autoApprove(); }, 400).unref();
+    setInterval(() => { for (const a of this.agents.values()) a.tick(); this.autoApprove(); this.watchdog(); }, 400).unref();
     this.on('change', () => this.drainQueue());
   }
 
@@ -320,6 +328,47 @@ export class Hub extends EventEmitter {
     if (!this.focus) this.focus = id;
     this.emit('change');
     return a;
+  }
+
+  // ── watchdog: a worker 'working' with an unchanged screen for stuckMinutes is reported once ──
+  private watches = new Map<string, Watch>();
+  get stuckMs() { return Math.max(0, this.cfg.stuckMinutes ?? 8) * 60_000; }
+
+  watchdog(now = Date.now()) {
+    for (const [id, w] of this.watches) {
+      const a = this.agents.get(id);
+      if (!a || a.status !== 'working') this.unwatch(id, w);   // stopped, settled or gone: not stuck any more
+    }
+    if (!this.stuckMs) return;
+    for (const a of this.agents.values()) {
+      if (a.role !== 'worker' || a.status !== 'working') continue;
+      const key = progressKey(a.screenText(40));
+      const w = this.watches.get(a.id);
+      if (!w) { this.watches.set(a.id, { key, since: now, reported: false }); continue; }
+      if (w.key !== key) { this.unwatch(a.id, w); this.watches.set(a.id, { key, since: now, reported: false }); continue; }
+      if (w.reported || now - w.since < this.stuckMs) continue;
+      w.reported = true;
+      const min = Math.max(1, Math.round((now - w.since) / 60_000));
+      const orch = this.orchestratorId;
+      // Fixed text only: the worker's screen is untrusted and must not reach the orchestrator.
+      try {
+        this.post('coban', orch || 'user', `${a.id} (${a.profile.title}) ${min} dakikadır 'çalışıyor' görünüyor ama ekranı değişmiyor — takılmış olabilir. ` +
+          (orch ? `\`coban read ${a.id}\` ile bak; gerekirse dürt, durdur veya görevi yeniden ver.` : 'Pencerede kontrol et.'));
+      } catch {}
+      this.emit('stuck', { id: a.id, since: w.since, minutes: min });
+      this.emit('change');
+    }
+  }
+
+  private unwatch(id: string, w: Watch) {
+    this.watches.delete(id);
+    if (w.reported && this.agents.has(id)) { this.emit('unstuck', { id }); this.emit('change'); }
+  }
+
+  // ms an agent has been stuck (only once reported), else 0.
+  stuckFor(id: string, now = Date.now()): number {
+    const w = this.watches.get(id);
+    return w?.reported ? now - w.since : 0;
   }
 
   // removeWorktree: also delete the worker's git worktree (kept when it has uncommitted changes; the branch always stays).
@@ -700,6 +749,7 @@ export class Hub extends EventEmitter {
         ...(a.status === 'error' ? { error: (k => k ? ERROR_LABEL[k] : 'hata')(errorKind(a.error)) } : {}),
         ...(a.cwd !== process.cwd() ? { cwd: a.cwd } : {}),
         ...(this.jobs.get(id)?.verify ? { verify: this.jobs.get(id)!.verifyState ?? 'pending' } : {}),
+        ...(this.stuckFor(id) ? { stuckMin: Math.max(1, Math.round(this.stuckFor(id) / 60_000)) } : {}),
         task: a.task.replace(/\s+/g, ' ').slice(0, 60),
         unreadMessages: a.inbox.filter((m) => !m.delivered).length,
         boardUnread: this.boardUnread(id),

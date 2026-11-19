@@ -19,6 +19,7 @@ export type Config = {
   orchestrator: string;          // profile preselected in the orchestrator picker
   orchestratorModel?: string;    // overrides the profile's model when it runs as orchestrator
   notifyDelay?: number;          // seconds a worker must stay continuously blocked before a notification (default 20)
+  stuckMinutes?: number;         // watchdog: a 'working' worker whose screen hasn't changed this long is reported as stuck (default 8, 0 = off)
   notify?: boolean;              // macOS notification when a worker waits for permission or hits a limit (default true)
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
   feedHidden?: boolean;          // feed column hidden (^b l); saved so the panel layout survives restarts
