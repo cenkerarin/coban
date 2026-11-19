@@ -9,7 +9,7 @@ import { BIN_DIR, checkName, DEFAULT_SOCK, MAX_MATCH_TEXT, ruleMatches, ruleRege
 import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
-import { addWorktree, checkVerify, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
+import { addWorktree, checkVerify, mergeWorktree, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const CLEAN_EXIT = [0, 130, 143];
@@ -27,7 +27,7 @@ const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
 // coban subcommands a worker may run without asking: reading and messaging only.
 export const WORKER_COMMANDS = ['post', 'send', 'inbox', 'board', 'agents', 'read', 'map', 'wait'];
 // RPC methods that act on other agents or widen permissions: only the user or the orchestrator may call them.
-const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
+const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm']);
 // RPC methods only the human may call (user token): permissions and other agents' credentials.
 const USER_ONLY = new Set(['rule_add', 'rule_rm', 'agent_token']);
 // Agent-authored message text, made safe to paste into another agent: NFKC + no invisible format characters (so
@@ -50,7 +50,7 @@ export function describeRequest(method: string, p: any): string[] {
   const out = [`istek: ${method}`];
   const fields: Record<string, string[]> = {
     spawn: ['profile', 'name', 'cwd', 'after', 'worktree', 'verify', 'task'],
-    approve: ['id', 'choice'], key: ['id', 'keys'], kill: ['id', 'removeWorktree'],
+    approve: ['id', 'choice'], key: ['id', 'keys'], kill: ['id', 'removeWorktree'], merge: ['id', 'cwd', 'test', 'remove'],
     rule_add: ['match', 'cwd', 'profile'], rule_rm: ['n'], agent_token: ['id'],
   };
   for (const k of fields[method] ?? Object.keys(p ?? {})) if (p?.[k] !== undefined) out.push(`${k}: ${v(p[k])}`);
@@ -867,6 +867,11 @@ export class Hub extends EventEmitter {
         throw new Error(`agent yok: ${p.id}`);
       }
       case 'kill': { const note = this.kill(p.id, { removeWorktree: !!p.removeWorktree }); return { ok: true, ...(note ? { note } : {}) }; }
+      case 'merge': {   // runs git and `npm test` as coban in p.cwd: privileged (user confirm / orchestrator only)
+        const job = this.jobs.get(p.id);
+        if (!job?.worktree) throw new Error(`${p.id}: worktree'li işçi değil`);
+        return mergeWorktree(path.resolve(p.cwd || process.cwd()), job, { test: p.test !== false, remove: !!p.remove });
+      }
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
       default: throw new Error(`bilinmeyen komut: ${method}`);
     }

@@ -30,6 +30,7 @@ Agent'ların içinden (veya başka bir terminalden):
                                       (metin: coban approvals'taki başlık ve tüm satırlar " · " ile birleşik; varsayılan kural yok)
   coban rule list | coban rule rm <no>
   coban key <id> <tuş...>             enter esc up down tab 1 2 y ...
+  coban merge <id> [--no-test] [--rm]  işçinin worktree dalını bulunduğun dala birleştir (çakışma/test hatasında geri alır; --rm: worktree'yi sil)
   coban kill <id> [--rm-worktree]     --rm-worktree: işçinin worktree'sini de sil (değişiklik varsa silmez; dal kalır)
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
   coban board [--limit n]             ortak kutunun son notları
@@ -49,7 +50,7 @@ const inAgent = () => 'COBAN_TOKEN' in process.env || 'COBAN_AGENT' in process.e
 // The hub knows callers by token only: an agent's own COBAN_TOKEN. A human's terminal has none; its privileged
 // requests (spawn/approve/key/kill/rule) wait for a "y" in the coban window.
 const token = () => process.env.COBAN_TOKEN ?? '';
-const NEEDS_CONFIRM = new Set(['spawn', 'approve', 'key', 'kill', 'rule_add', 'rule_rm']);
+const NEEDS_CONFIRM = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm']);
 
 function call(method: string, params: object): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -70,7 +71,7 @@ function call(method: string, params: object): Promise<any> {
   });
 }
 
-const BOOL_FLAGS = ['scrollback', 'raw', 'json', 'worktree', 'rm-worktree'];
+const BOOL_FLAGS = ['scrollback', 'raw', 'json', 'worktree', 'rm-worktree', 'no-test', 'rm'];
 
 function parse(argv: string[]) {
   const pos: string[] = [];
@@ -237,6 +238,10 @@ async function main() {
     case 'kill': {
       const r = await call('kill', { id: pos[0], removeWorktree: !!flags['rm-worktree'] });
       return print(r, () => `kapatıldı: ${pos[0]}${r.note ? ' · ' + r.note : ''}`);
+    }
+    case 'merge': {
+      const r = await call('merge', { id: pos[0], cwd: process.cwd(), test: !flags['no-test'], remove: !!flags.rm });
+      return print(r, () => r.summary);
     }
     case 'inbox': {
       const r = await call('inbox', {});
