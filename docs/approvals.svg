@@ -57,16 +57,16 @@
 <text x="123.2" y="27" fill="#808080" textLength="75.6" lengthAdjust="spacing">  1 mesaj</text>
 <text x="417.2" y="27" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="27" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="988.4" y="27" fill="#c8c8c8" textLength="16.8" lengthAdjust="spacing"> ▍</text>
+<text x="988.4" y="27" fill="#e6e6e6" textLength="16.8" lengthAdjust="spacing"> ▍</text>
 <text x="1005.2" y="27" fill="#808080" textLength="58.8" lengthAdjust="spacing" font-weight="700">SOHBET </text>
-<text x="1064.0" y="27" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠧</text>
+<text x="1064.0" y="27" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠏</text>
 <text x="1072.4" y="27" fill="#d4d4d4" textLength="75.6" lengthAdjust="spacing" font-weight="700"> orkestra</text>
 <text x="1148.0" y="27" fill="#808080" textLength="25.2" lengthAdjust="spacing"> · </text>
 <text x="1173.2" y="27" fill="#f6d5c8" textLength="75.6" lengthAdjust="spacing">Claude H1</text>
 <text x="1248.8" y="27" fill="#808080" textLength="100.8" lengthAdjust="spacing"> · çalışıyor</text>
 <text x="14.0" y="45" fill="#444444" textLength="411.6" lengthAdjust="spacing">────────────────────────────────────────────────│</text>
 <text x="980.0" y="45" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="22.4" y="63" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="63" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="63" fill="#f6d5c8" textLength="16.8" lengthAdjust="spacing">✦ </text>
 <text x="89.6" y="63" fill="#f6d5c8" textLength="67.2" lengthAdjust="spacing" font-weight="700">orkestra</text>
 <text x="156.8" y="63" fill="#808080" textLength="260.4" lengthAdjust="spacing" font-style="italic"> orkestratör açıldı · Claude H1</text>
@@ -76,7 +76,7 @@
 <text x="996.8" y="63" fill="#d4d4d4" textLength="697.2" lengthAdjust="spacing"> coban'a e-posta ile giriş ekleyelim: API, istemci ve testler paralel gitsin.      </text>
 <text x="417.2" y="81" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="81" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="22.4" y="99" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="99" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="99" fill="#ffd9a0" textLength="16.8" lengthAdjust="spacing">✦ </text>
 <text x="89.6" y="99" fill="#ffd9a0" textLength="25.2" lengthAdjust="spacing" font-weight="700">api</text>
 <text x="114.8" y="99" fill="#808080" textLength="201.6" lengthAdjust="spacing" font-style="italic"> işçi açıldı · Claude H2</text>
@@ -92,7 +92,7 @@
 <text x="988.4" y="135" fill="#d7875f" textLength="8.4" lengthAdjust="spacing">⏺</text>
 <text x="1005.2" y="135" fill="#d4d4d4" textLength="33.6" lengthAdjust="spacing" font-weight="700">Bash</text>
 <text x="1038.8" y="135" fill="#d4d4d4" textLength="655.2" lengthAdjust="spacing">(coban usage)                                                                 </text>
-<text x="22.4" y="153" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="153" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="153" fill="#c8e6c9" textLength="16.8" lengthAdjust="spacing">✦ </text>
 <text x="89.6" y="153" fill="#c8e6c9" textLength="58.8" lengthAdjust="spacing" font-weight="700">istemci</text>
 <text x="148.4" y="153" fill="#808080" textLength="201.6" lengthAdjust="spacing" font-style="italic"> işçi açıldı · Claude H3</text>
@@ -107,7 +107,7 @@
 <text x="988.4" y="189" fill="#d7875f" textLength="8.4" lengthAdjust="spacing">⏺</text>
 <text x="1005.2" y="189" fill="#d4d4d4" textLength="33.6" lengthAdjust="spacing" font-weight="700">Bash</text>
 <text x="1038.8" y="189" fill="#d4d4d4" textLength="655.2" lengthAdjust="spacing">(coban spawn h2 "HEDEF: POST /login …" --ctx "src/api.ts#router")             </text>
-<text x="22.4" y="207" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="207" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="207" fill="#f6d5c8" textLength="16.8" lengthAdjust="spacing">✦ </text>
 <text x="89.6" y="207" fill="#f6d5c8" textLength="33.6" lengthAdjust="spacing" font-weight="700">test</text>
 <text x="123.2" y="207" fill="#808080" textLength="201.6" lengthAdjust="spacing" font-style="italic"> işçi açıldı · Claude H1</text>
@@ -123,7 +123,7 @@
 <text x="417.2" y="243" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="243" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="1005.2" y="243" fill="#d4d4d4" textLength="151.2" lengthAdjust="spacing" opacity="0.6">⎿  açıldı: istemci</text>
-<text x="22.4" y="261" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="261" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="261" fill="#ff5f5f" textLength="16.8" lengthAdjust="spacing" font-weight="700">! </text>
 <text x="89.6" y="261" fill="#f6d5c8" textLength="33.6" lengthAdjust="spacing" font-weight="700">test</text>
 <text x="123.2" y="261" fill="#808080" textLength="117.6" lengthAdjust="spacing" font-style="italic"> izin bekliyor</text>
@@ -135,7 +135,7 @@
 <text x="417.2" y="279" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="279" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="1005.2" y="279" fill="#d4d4d4" textLength="126.0" lengthAdjust="spacing" opacity="0.6">⎿  açıldı: test</text>
-<text x="22.4" y="297" fill="#808080" textLength="50.4" lengthAdjust="spacing">15:27 </text>
+<text x="22.4" y="297" fill="#808080" textLength="50.4" lengthAdjust="spacing">16:05 </text>
 <text x="72.8" y="297" fill="#ffd9a0" textLength="25.2" lengthAdjust="spacing" font-weight="700">api</text>
 <text x="98.0" y="297" fill="#808080" textLength="25.2" lengthAdjust="spacing"> → </text>
 <text x="123.2" y="297" fill="#f6d5c8" textLength="67.2" lengthAdjust="spacing" font-weight="700">orkestra</text>
@@ -143,31 +143,31 @@
 <text x="980.0" y="297" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="22.4" y="315" fill="#d0d0d0" textLength="294.0" lengthAdjust="spacing">  api bitti: POST /login + /refresh</text>
 <text x="417.2" y="315" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="551.6" y="315" fill="#9f8035" textLength="16.8" lengthAdjust="spacing" font-weight="700">╔═</text>
+<text x="551.6" y="315" fill="#b7933c" textLength="16.8" lengthAdjust="spacing" font-weight="700">╔═</text>
 <text x="568.4" y="315" fill="#808080" textLength="8.4" lengthAdjust="spacing">1</text>
-<text x="576.8" y="315" fill="#9f8035" textLength="285.6" lengthAdjust="spacing" font-weight="700">═════════════════════════════════╗</text>
+<text x="576.8" y="315" fill="#b7933c" textLength="285.6" lengthAdjust="spacing" font-weight="700">═════════════════════════════════╗</text>
 <text x="980.0" y="315" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="988.4" y="315" fill="#d7875f" textLength="8.4" lengthAdjust="spacing">⏺</text>
 <text x="1005.2" y="315" fill="#d4d4d4" textLength="33.6" lengthAdjust="spacing" font-weight="700">Bash</text>
 <text x="1038.8" y="315" fill="#d4d4d4" textLength="655.2" lengthAdjust="spacing">(coban wait --timeout 600)                                                    </text>
 <text x="417.2" y="333" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="551.6" y="333" fill="#9f8035" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
+<text x="551.6" y="333" fill="#b7933c" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
 <text x="660.8" y="333" fill="#cba343" textLength="92.4" lengthAdjust="spacing">ORKESTRATÖR</text>
-<text x="854.0" y="333" fill="#9f8035" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
+<text x="854.0" y="333" fill="#b7933c" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
 <text x="980.0" y="333" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="1005.2" y="333" fill="#d4d4d4" textLength="445.2" lengthAdjust="spacing" opacity="0.6">⎿  ✉ api: POST /login hazır, {token, user} döndürüyor</text>
 <text x="417.2" y="351" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="551.6" y="351" fill="#9f8035" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
-<text x="576.8" y="351" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠧</text>
+<text x="551.6" y="351" fill="#b7933c" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
+<text x="576.8" y="351" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠏</text>
 <text x="585.2" y="351" fill="#f6d5c8" textLength="100.8" lengthAdjust="spacing" font-weight="700"> Claude · H1</text>
 <text x="686.0" y="351" fill="#87d787" textLength="25.2" lengthAdjust="spacing"> ✉1</text>
-<text x="711.2" y="351" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor.  </text>
-<text x="854.0" y="351" fill="#9f8035" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
+<text x="711.2" y="351" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor...</text>
+<text x="854.0" y="351" fill="#b7933c" textLength="8.4" lengthAdjust="spacing" font-weight="700">║</text>
 <text x="980.0" y="351" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="369" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="551.6" y="369" fill="#9f8035" textLength="151.2" lengthAdjust="spacing" font-weight="700">╚═════════════════</text>
+<text x="551.6" y="369" fill="#b7933c" textLength="151.2" lengthAdjust="spacing" font-weight="700">╚═════════════════</text>
 <text x="702.8" y="369" fill="#cba343" textLength="8.4" lengthAdjust="spacing" font-weight="700">╤</text>
-<text x="711.2" y="369" fill="#9f8035" textLength="151.2" lengthAdjust="spacing" font-weight="700">═════════════════╝</text>
+<text x="711.2" y="369" fill="#b7933c" textLength="151.2" lengthAdjust="spacing" font-weight="700">═════════════════╝</text>
 <text x="980.0" y="369" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="988.4" y="369" fill="#d7875f" textLength="8.4" lengthAdjust="spacing">⏺</text>
 <text x="996.8" y="369" fill="#d4d4d4" textLength="697.2" lengthAdjust="spacing"> api bitti. istemci ve test hâlâ çalışıyor; test bir izin bekliyor, bakıyorum.     </text>
@@ -175,43 +175,47 @@
 <text x="568.4" y="387" fill="#b8862a" textLength="285.6" lengthAdjust="spacing">┏━━━━━━━━━━━━━━━╋━━━━━━━━━━━━━━━━┓</text>
 <text x="980.0" y="387" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="405" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="442.4" y="405" fill="#f7d29b" textLength="16.8" lengthAdjust="spacing">╭─</text>
+<text x="442.4" y="405" fill="#dfbe8c" textLength="16.8" lengthAdjust="spacing">╭─</text>
 <text x="459.2" y="405" fill="#808080" textLength="8.4" lengthAdjust="spacing">2</text>
-<text x="467.6" y="405" fill="#f7d29b" textLength="226.8" lengthAdjust="spacing">────────────┸─────────────╮</text>
+<text x="467.6" y="405" fill="#dfbe8c" textLength="126.0" lengthAdjust="spacing">────────────┸──</text>
+<text x="593.6" y="405" fill="#808080" textLength="84.0" lengthAdjust="spacing">yazıyor...</text>
+<text x="677.6" y="405" fill="#dfbe8c" textLength="16.8" lengthAdjust="spacing">─╮</text>
 <text x="702.8" y="405" fill="#b8862a" textLength="8.4" lengthAdjust="spacing">┃</text>
-<text x="719.6" y="405" fill="#7f9380" textLength="16.8" lengthAdjust="spacing">╭─</text>
+<text x="719.6" y="405" fill="#90a691" textLength="16.8" lengthAdjust="spacing">╭─</text>
 <text x="736.4" y="405" fill="#808080" textLength="8.4" lengthAdjust="spacing">3</text>
-<text x="744.8" y="405" fill="#7f9380" textLength="226.8" lengthAdjust="spacing">────────────┸─────────────╮</text>
+<text x="744.8" y="405" fill="#90a691" textLength="126.0" lengthAdjust="spacing">────────────┸──</text>
+<text x="870.8" y="405" fill="#808080" textLength="84.0" lengthAdjust="spacing">yazıyor...</text>
+<text x="954.8" y="405" fill="#90a691" textLength="16.8" lengthAdjust="spacing">─╮</text>
 <text x="980.0" y="405" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="988.4" y="405" fill="#d7875f" textLength="8.4" lengthAdjust="spacing">✻</text>
 <text x="996.8" y="405" fill="#d4d4d4" textLength="100.8" lengthAdjust="spacing"> Çalışıyor… </text>
 <text x="1097.6" y="405" fill="#d4d4d4" textLength="151.2" lengthAdjust="spacing" opacity="0.6">(esc to interrupt)</text>
 <text x="417.2" y="423" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="442.4" y="423" fill="#f7d29b" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="543.2" y="423" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠦</text>
-<text x="551.6" y="423" fill="#d4d4d4" textLength="134.4" lengthAdjust="spacing"> api            </text>
-<text x="686.0" y="423" fill="#f7d29b" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="442.4" y="423" fill="#dfbe8c" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="526.4" y="423" fill="#ffaf00" textLength="42.0" lengthAdjust="spacing">(◑‿◑)</text>
+<text x="568.4" y="423" fill="#d4d4d4" textLength="117.6" lengthAdjust="spacing"> api          </text>
+<text x="686.0" y="423" fill="#dfbe8c" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="702.8" y="423" fill="#b8862a" textLength="8.4" lengthAdjust="spacing">┃</text>
-<text x="719.6" y="423" fill="#7f9380" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="803.6" y="423" fill="#ffaf00" textLength="8.4" lengthAdjust="spacing">⠋</text>
-<text x="812.0" y="423" fill="#d4d4d4" textLength="151.2" lengthAdjust="spacing"> istemci          </text>
-<text x="963.2" y="423" fill="#7f9380" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="719.6" y="423" fill="#90a691" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="786.8" y="423" fill="#ffaf00" textLength="42.0" lengthAdjust="spacing">(◐‿◐)</text>
+<text x="828.8" y="423" fill="#d4d4d4" textLength="134.4" lengthAdjust="spacing"> istemci        </text>
+<text x="963.2" y="423" fill="#90a691" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="423" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="441" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="442.4" y="441" fill="#f7d29b" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="442.4" y="441" fill="#dfbe8c" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="467.6" y="441" fill="#ffd9a0" textLength="75.6" lengthAdjust="spacing">Claude H2</text>
-<text x="543.2" y="441" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor.  </text>
-<text x="686.0" y="441" fill="#f7d29b" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="543.2" y="441" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor...</text>
+<text x="686.0" y="441" fill="#dfbe8c" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="702.8" y="441" fill="#b8862a" textLength="8.4" lengthAdjust="spacing">┃</text>
-<text x="719.6" y="441" fill="#7f9380" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="719.6" y="441" fill="#90a691" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="744.8" y="441" fill="#c8e6c9" textLength="75.6" lengthAdjust="spacing">Claude H3</text>
-<text x="820.4" y="441" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor.  </text>
-<text x="963.2" y="441" fill="#7f9380" textLength="8.4" lengthAdjust="spacing">│</text>
+<text x="820.4" y="441" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · çalışıyor...</text>
+<text x="963.2" y="441" fill="#90a691" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="441" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="459" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="442.4" y="459" fill="#f7d29b" textLength="252.0" lengthAdjust="spacing">╰────────────────────────────╯</text>
+<text x="442.4" y="459" fill="#dfbe8c" textLength="252.0" lengthAdjust="spacing">╰────────────────────────────╯</text>
 <text x="702.8" y="459" fill="#b8862a" textLength="8.4" lengthAdjust="spacing">┃</text>
-<text x="719.6" y="459" fill="#7f9380" textLength="252.0" lengthAdjust="spacing">╰────────────────────────────╯</text>
+<text x="719.6" y="459" fill="#90a691" textLength="252.0" lengthAdjust="spacing">╰────────────────────────────╯</text>
 <text x="980.0" y="459" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="477" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="576.8" y="477" fill="#b8862a" textLength="268.8" lengthAdjust="spacing">┏━━━━━━━━━━━━━━┻━━━━━━━━━━━━━━━┓</text>
@@ -224,9 +228,9 @@
 <text x="980.0" y="495" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="513" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="450.8" y="513" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="543.2" y="513" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">!</text>
-<text x="551.6" y="513" fill="#d4d4d4" textLength="42.0" lengthAdjust="spacing"> test</text>
-<text x="593.6" y="513" fill="#87d787" textLength="16.8" lengthAdjust="spacing"> ✓</text>
+<text x="518.0" y="513" fill="#ff5f5f" textLength="50.4" lengthAdjust="spacing" font-weight="700">\(°o°)</text>
+<text x="568.4" y="513" fill="#d4d4d4" textLength="42.0" lengthAdjust="spacing"> test</text>
+<text x="610.4" y="513" fill="#87d787" textLength="16.8" lengthAdjust="spacing"> ✓</text>
 <text x="694.4" y="513" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="803.6" y="513" fill="#808080" textLength="8.4" lengthAdjust="spacing">┆</text>
 <text x="828.8" y="513" fill="#87d787" textLength="8.4" lengthAdjust="spacing" font-weight="700">+</text>
@@ -268,38 +272,38 @@
 <text x="417.2" y="747" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="980.0" y="747" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="765" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="765" fill="#ff5f5f" textLength="537.6" lengthAdjust="spacing" font-weight="700">╭─ ! İZİN BEKLEYENLER (1) ─────────────────────────────────────╮</text>
+<text x="434.0" y="765" fill="#d75f5f" textLength="537.6" lengthAdjust="spacing" font-weight="700">╭─ ! İZİN BEKLEYENLER (1) ─────────────────────────────────────╮</text>
 <text x="980.0" y="765" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="783" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="783" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="434.0" y="783" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="450.8" y="783" fill="#cba343" textLength="16.8" lengthAdjust="spacing" font-weight="700">▸ </text>
 <text x="467.6" y="783" fill="#f6d5c8" textLength="33.6" lengthAdjust="spacing" font-weight="700">test</text>
 <text x="501.2" y="783" fill="#808080" textLength="126.0" lengthAdjust="spacing"> · Claude H1 · </text>
 <text x="627.2" y="783" fill="#d4d4d4" textLength="310.8" lengthAdjust="spacing" font-weight="700">&gt; HEDEF: login uçtan uca testleri ASK</text>
-<text x="963.2" y="783" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="963.2" y="783" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="980.0" y="783" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="801" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="801" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="434.0" y="801" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="467.6" y="801" fill="#ffd7af" textLength="487.2" lengthAdjust="spacing">⏺ Read(src/api.ts) · ⎿  Read 120 lines · Bash command · n…</text>
-<text x="963.2" y="801" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="963.2" y="801" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="980.0" y="801" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="819" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="819" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="434.0" y="819" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="467.6" y="819" fill="#87d787" textLength="58.8" lengthAdjust="spacing" font-weight="700">[y] Yes</text>
 <text x="543.2" y="819" fill="#ff5f5f" textLength="50.4" lengthAdjust="spacing" font-weight="700">[r] No</text>
-<text x="963.2" y="819" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="963.2" y="819" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="980.0" y="819" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="417.2" y="837" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="837" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
-<text x="963.2" y="837" fill="#ff5f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="434.0" y="837" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
+<text x="963.2" y="837" fill="#d75f5f" textLength="8.4" lengthAdjust="spacing" font-weight="700">│</text>
 <text x="980.0" y="837" fill="#444444" textLength="16.8" lengthAdjust="spacing">│─</text>
 <text x="996.8" y="837" fill="#808080" textLength="58.8" lengthAdjust="spacing"> sen → </text>
 <text x="1055.6" y="837" fill="#f6d5c8" textLength="67.2" lengthAdjust="spacing" font-weight="700">orkestra</text>
 <text x="1685.6" y="837" fill="#444444" textLength="8.4" lengthAdjust="spacing">─</text>
 <text x="417.2" y="855" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
-<text x="434.0" y="855" fill="#ff5f5f" textLength="16.8" lengthAdjust="spacing" font-weight="700">╰─</text>
+<text x="434.0" y="855" fill="#d75f5f" textLength="16.8" lengthAdjust="spacing" font-weight="700">╰─</text>
 <text x="450.8" y="855" fill="#808080" textLength="378.0" lengthAdjust="spacing"> ^b y onayla · a hep · r reddet · i sıradaki </text>
-<text x="828.8" y="855" fill="#ff5f5f" textLength="142.8" lengthAdjust="spacing" font-weight="700">────────────────╯</text>
+<text x="828.8" y="855" fill="#d75f5f" textLength="142.8" lengthAdjust="spacing" font-weight="700">────────────────╯</text>
 <text x="980.0" y="855" fill="#444444" textLength="8.4" lengthAdjust="spacing">│</text>
 <text x="988.4" y="855" fill="#808080" textLength="25.2" lengthAdjust="spacing"> › </text>
 <text x="1013.6" y="855" fill="#808080" textLength="495.6" lengthAdjust="spacing" font-style="italic">@agent ile birine, @all ile herkese yaz… (^b c ya da tıkla)</text>
