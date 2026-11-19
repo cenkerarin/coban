@@ -75,6 +75,7 @@ coban read <id> [--lines n] [--raw]            an agent's screen, UI chrome stri
 coban approvals                                agents waiting on a permission question, parsed
 coban approve <id> [yes|always|no]             answer it (always = the "Yes, and …" option)
 coban key <id> <keys...>                       enter esc up down tab y 1 2 ...
+coban export [--out file.md]                   history as a Markdown report (timeline, worker table, board decisions)
 coban usage                                    per-account usage, least spent first
 coban doctor [--json]                          check Node, config, profile CLIs, Claude logins, socket, git (exit 1 on failure)
 coban kill <id> · coban log                    every command takes --json
