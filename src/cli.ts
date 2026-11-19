@@ -145,7 +145,7 @@ async function main() {
       const str = (v: unknown) => (typeof v === 'string' ? v : undefined);
       const after = str(flags.after)?.split(',').map((x) => x.trim()).filter(Boolean);
       const r = await call('spawn', {
-        profile: pos[0], task: pos.slice(1).join(' ') + snippets(ctx, cwd), name: flags.name, cwd: flags.cwd,
+        profile: pos[0], task: pos.slice(1).join(' ') + snippets(ctx, cwd), name: flags.name, cwd: typeof flags.cwd === 'string' ? flags.cwd : process.cwd(),
         after, worktree: flags.worktree, verify: str(flags.verify),
       });
       return print(r, () => r.queued ? `kuyrukta: ${r.id} (bekliyor: ${after!.join(', ')})` : `açıldı: ${r.id}${r.worktree ? `  worktree=${r.worktree} dal=${r.branch}` : ''}`);
