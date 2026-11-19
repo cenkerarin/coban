@@ -12,6 +12,7 @@ function repo(testScript = 'exit 0') {
   const dir = fs.realpathSync(fs.mkdtempSync(path.join(os.tmpdir(), 'coban-merge-')));
   const r = path.join(dir, 'r'); fs.mkdirSync(r);
   g(r, 'init', '-q', '-b', 'main');
+  g(r, 'config', 'user.name', 't'); g(r, 'config', 'user.email', 't@t'); // CI runners have no global git identity; mergeWorktree commits
   fs.writeFileSync(path.join(r, 'package.json'), JSON.stringify({ scripts: { test: testScript } }));
   fs.writeFileSync(path.join(r, 'a.txt'), 'base\n');
   g(r, 'add', '.'); g(r, 'commit', '-qm', 'base');

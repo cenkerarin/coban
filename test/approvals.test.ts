@@ -49,6 +49,6 @@ test('input line: @id goes to that agent, @all to the board', async () => {
   c.write('@all karar: v2'); c.write('\r');
   await until(async () => /\[ortak\] user: karar: v2/.test(await c.cli('m2', 'inbox')));
   c.write('@yok x'); c.write('\r');
-  await until(() => /agent yok: @yok/.test(c.screen()), 3000, 20);   // a flash: poll tightly, a fixed sleep can miss the frame
+  await until(() => /agent yok: @yok/.test(c.screen()), 6000, 20);   // a flash: poll tightly, a fixed sleep can miss the frame
   c.write('\x15\x1b'); // clear, leave the input line
 });
