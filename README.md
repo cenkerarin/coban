@@ -334,3 +334,18 @@ marked in `coban approvals`. Each regex runs under a 50 ms limit (a catastrophic
 default rules and only the user (not an agent) can add or remove them. Rules written for 0.3 (body only) no longer
 match: prefix them with the title.
 `coban rule list` / `coban rule rm <n>`; rules live in the config's `rules`.
+
+## Maliyet (`coban cost`, `^b $`)
+
+Her işçinin ve oturumun harcadığı token görünür: Claude oturum günlüklerinden giriş / çıkış / cache yazma / cache okuma ayrı toplanır. İşçi bitince ya da kapatılınca son değeri saklanır (graftan çıksa da oturum toplamında kalır) ve geçmişe `cost` kaydı olarak yazılır; onaylı plandan gelen işçiler plan toplamında da görünür.
+
+- `coban cost [--json]` — oturum toplamı, agent başına tablo (süre, token, durum), hesap başına ve plan toplamı.
+- `^b $` — feed alanında agent başına yatay çubuklar (en çok harcayan üstte). İşçi bitince balonda/feed'de "bu iş 1.2M token" görünür.
+- `coban export` raporunda "Maliyet" tablosu bulunur.
+- Dolar tahmini isteğe bağlıdır; fiyat koda gömülü değildir. Kendi fiyatlarını `config.json`'a yaz (USD / 1M token; anahtar model kimliği ya da bir parçası, ör. `sonnet`), tanımlı değilse yalnızca token gösterilir:
+
+```json
+"prices": { "sonnet": { "in": 3, "out": 15, "cacheRead": 0.3 } }
+```
+
+Cache yazma giriş fiyatıyla hesaplanır. Claude dışı CLI'larda token bilinmez (tabloda `-`).

@@ -1,4 +1,5 @@
 import { readHistory, type HistoryEntry } from './history.ts';
+import { fmtTokens, fmtUsd } from './usage.ts';
 
 // Turns the persisted history into a readable Markdown report. Pure: only reads the history file.
 const pad = (n: number) => String(n).padStart(2, '0');
@@ -11,11 +12,12 @@ export function renderReport(entries: HistoryEntry[]): string {
   if (!entries.length) return '# coban raporu\n\nGeçmiş boş: dışa aktarılacak kayıt yok.\n';
   const es = [...entries].sort((a, b) => a.ts - b.ts);
   const events = es.filter((e) => e.kind === 'event');
+  const costs = es.filter((e) => e.kind === 'cost' && e.cost);
   const notes = es.filter((e) => e.kind === 'msg' && e.to === 'all');
 
   const out: string[] = ['# coban raporu', '', `- Aralık: ${stamp(es[0].ts)} → ${stamp(es[es.length - 1].ts)} (${hms(es[es.length - 1].ts - es[0].ts)})`,
-    `- Kayıt: ${events.length} olay, ${es.length - events.length} mesaj`, '', '## Zaman çizelgesi', ''];
-  for (const e of es) {
+    `- Kayıt: ${events.length} olay, ${es.filter((e) => e.kind === 'msg').length} mesaj`, '', '## Zaman çizelgesi', ''];
+  for (const e of es.filter((e) => e.kind !== 'cost')) {
     out.push(e.kind === 'msg'
       ? `- ${stamp(e.ts)} **${e.id}** → ${e.to}: ${one(e.text)}`
       : `- ${stamp(e.ts)} **${e.id}**: ${one(e.text)}${e.detail ? ` — ${one(e.detail)}` : ''}`);
@@ -38,6 +40,23 @@ export function renderReport(entries: HistoryEntry[]): string {
     const last = es[es.length - 1].ts;
     out.push('| id | profil | süre | son durum |', '|---|---|---|---|');
     for (const w of workers.values()) out.push(`| ${cell(w.id)} | ${cell(w.profile)} | ${hms((w.end ?? last) - w.start)}${w.end ? '' : '+'} | ${cell(w.last)} |`);
+  }
+
+  out.push('', '## Maliyet', '');
+  if (!costs.length) out.push('(maliyet kaydı yok)');
+  else {
+    const priced = costs.some((e) => e.cost!.usd !== undefined);
+    out.push(`| id | profil/model | plan | süre | token (giriş/çıkış/cache yaz./okuma) | toplam |${priced ? ' $ |' : ''} durum |`, `|---|---|---|---|---|---|${priced ? '---|' : ''}---|`);
+    let sum = 0, usdSum = 0;
+    for (const e of costs) {
+      const c = e.cost!, t = c.in + c.out + c.cacheWrite;
+      sum += t; usdSum += c.usd ?? 0;
+      out.push(`| ${cell(e.id)} | ${cell(c.profile + (c.model ? '/' + c.model : ''))} | ${cell(c.plan ?? '-')} | ${hms(c.ms)} | ${[c.in, c.out, c.cacheWrite, c.cacheRead].map(fmtTokens).join(' / ')} | ${fmtTokens(t)} |${priced ? ` ${c.usd !== undefined ? fmtUsd(c.usd) : '-'} |` : ''} ${cell(c.status)} |`);
+    }
+    out.push('', `Toplam: ${fmtTokens(sum)} token${priced ? ` · ~${fmtUsd(usdSum)}` : ''} (giriş+çıkış+cache yazma; yalnız biten/kapatılan işçiler)`);
+    const plans = new Map<string, number>();
+    for (const e of costs) if (e.cost!.plan) plans.set(e.cost!.plan, (plans.get(e.cost!.plan) ?? 0) + e.cost!.in + e.cost!.out + e.cost!.cacheWrite);
+    for (const [t, n] of plans) out.push(`- Plan "${t}": ${fmtTokens(n)} token`);
   }
 
   out.push('', '## Kararlar (pano notları)', '');

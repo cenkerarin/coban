@@ -6,7 +6,7 @@ import { EventEmitter } from 'node:events';
 import { notify, type Notifier } from './notify.ts';
 import { Agent, ERROR_LABEL, errorKind, keyBytes, maskLimitText, type Msg, type Role, type Status } from './agent.ts';
 import { BIN_DIR, checkName, DEFAULT_SOCK, MAX_MATCH_TEXT, ruleMatches, ruleRegex, saveRules, SOCK, STATE_DIR, type ApprovalRule, type Config, type Profile } from './config.ts';
-import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './usage.ts';
+import { agentBreakdown, agentTokens, allUsage, buildCost, forecast, isClaude, tokTotal, type AccountUsage, type CostInput, type CostSummary, type Tok } from './usage.ts';
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 import { addWorktree, checkVerify, mergeWorktree, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
@@ -99,6 +99,7 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban inbox                          sana gelen mesajlar + ortak kutudaki yeni notlar (yalnızca okumadıkların)
   coban board [--limit 20]             ortak kutunun son notları (yeni katılan biri için)
   coban usage                          hesap başına kullanım: 5 saatlik %, 7 günlük token, reset; en az harcayan başta
+  coban cost                           oturum maliyeti: işçi başına token (ve config'te fiyat varsa $), hesap ve plan toplamı
   coban kill <id> [--rm-worktree]  ·  coban post user "<mesaj>"
 
 Profiller: ${profiles.map((p) => `${p.id} (${p.title}${p.model ? ', ' + p.model : ''})`).join(', ')}.
@@ -318,6 +319,7 @@ export class Hub extends EventEmitter {
         });
       }
       if (s === 'working') this.worked.add(a.id);
+      if (s === 'exited') this.finalizeCost(a, 'exited');
       if (SETTLED.includes(s)) {
         if (this.focus !== a.id) a.unread = true;
         if (s === 'idle') this.flushInbox(a);
@@ -385,6 +387,7 @@ export class Hub extends EventEmitter {
       return;
     }
     const a = this.get(id);
+    this.finalizeCost(a, 'kapatıldı');
     a.kill();
     for (const [t, x] of this.tokens) if (x === id) this.tokens.delete(t);
     const job = this.jobs.get(id);
@@ -465,6 +468,7 @@ export class Hub extends EventEmitter {
     const chk = validatePlan(pl, this.planEnv());   // agents may have come and gone since it was proposed
     if (chk.errors.length) throw new Error(`plan artık geçerli değil: ${chk.errors.join(' · ')} (reddet ve yeniden gönderilsin)`);
     this.plan = undefined;
+    for (const n of pl.nodes) this.planOf.set(n.id, pl.title);
     const by = new Map(pl.nodes.map((n) => [n.id, n]));
     const started: string[] = [], queued: string[] = [], failed: string[] = [];
     for (const id of chk.order) {
@@ -806,6 +810,45 @@ export class Hub extends EventEmitter {
     return out;
   }
 
+  // ── cost: token spend per agent, kept after the agent is gone ──
+  private planOf = new Map<string, string>();          // worker id → title of the approved plan that started it
+  private costDone = new WeakSet<Agent>();
+  finished: CostInput[] = [];                          // final figures of agents that exited / were killed (this session)
+
+  private costInput(a: Agent, end?: { at: number; status: string }): CostInput {
+    let tok: Tok | null = null;
+    try { tok = agentBreakdown(a.profile, a.cwd, a.startedAt, end?.at); } catch {}
+    const plan = this.planOf.get(a.id);
+    return { id: a.id, profile: a.profile.id, model: a.model || a.profile.model || '', role: a.role, status: end?.status ?? a.status, startedAt: a.startedAt, ...(end ? { endedAt: end.at } : {}), tok, ...(plan ? { plan } : {}) };
+  }
+
+  // Freeze an agent's spend once (exit or kill): keeps it in the session total and writes a 'cost' history entry.
+  private finalizeCost(a: Agent, status: string) {
+    if (this.costDone.has(a)) return;
+    this.costDone.add(a);
+    const row = this.costInput(a, { at: Date.now(), status });
+    this.finished.push(row);
+    if (!row.tok) return;
+    const s = buildCost([row], this.cfg.prices).agents[0];
+    const t = row.tok;
+    this.record({ ts: row.endedAt!, kind: 'cost', id: a.id, text: `${tokTotal(t)} token`, cost: {
+      profile: row.profile, model: row.model, role: row.role, status, ms: s.ms, in: t.in, out: t.out, cacheWrite: t.cacheWrite, cacheRead: t.cacheRead,
+      ...(s.usd !== undefined ? { usd: s.usd } : {}), ...(row.plan ? { plan: row.plan } : {}) } });
+  }
+
+  // Whole session: finished agents (frozen) + live ones (now). Prices only from config.prices.
+  costSummary(): CostSummary {
+    const live = [...this.agents.values()].filter((a) => !this.costDone.has(a)).map((a) => this.costInput(a));
+    return buildCost([...this.finished, ...live], this.cfg.prices);
+  }
+
+  // One agent's spend so far (live read, for the "bu iş X token" line); null = unknown.
+  agentCost(id: string): number | null {
+    const a = this.agents.get(id);
+    if (!a) return null;
+    try { return agentTokens(a.profile, a.cwd, a.startedAt); } catch { return null; }
+  }
+
   list() {
     return this.order.map((id) => {
       const a = this.agents.get(id)!;
@@ -879,6 +922,7 @@ export class Hub extends EventEmitter {
           queued: this.queue.map((j) => ({ id: j.id, profile: j.spawn.profile, after: j.after, task: (j.spawn.task ?? '').replace(/\s+/g, ' ').slice(0, 60) })),
         };
       }
+      case 'cost': return this.costSummary();
       case 'history': return { history: readHistory(p.limit ?? 50) };
       case 'spawn': {
         // Redundant with PRIVILEGED today, but --worktree/--verify run git/shell as coban: keep the check next to them.
@@ -986,6 +1030,7 @@ export class Hub extends EventEmitter {
   }
 
   shutdown() {
+    for (const a of this.agents.values()) this.finalizeCost(a, 'oturum kapandı');
     for (const a of this.agents.values()) a.kill();
     this.server?.close();
     try { fs.unlinkSync(SOCK); } catch {}

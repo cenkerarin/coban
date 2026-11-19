@@ -1,6 +1,6 @@
 import type { Agent, Msg, Role, Status } from './agent.ts';
 import type { Hub } from './hub.ts';
-import { fmtTokens, type AccountUsage } from './usage.ts';
+import { fmtTokens, fmtUsd, type AccountUsage, type CostSummary } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
 import { saveLayout } from './config.ts';
 import { McpWatch } from './mcp.ts';
@@ -269,6 +269,9 @@ export class Tui {
   pickIdx = 0;
   notice = '';
   showBoard = false;
+  showCost = false;     // ^b $: per-agent token spend panel
+  cost?: CostSummary;   // cached while the panel is open (refreshed off the render path)
+  costAt = 0;
   feedHidden = false;   // restored from the config in the constructor
   chatShare = CHAT_SHARE;
   feedShare?: number;   // undefined = automatic feed width
@@ -285,6 +288,7 @@ export class Tui {
   approvalsBox?: Rect;
   approvalHits: { x0: number; x1: number; y: number; id: string; choice?: Choice }[] = [];
   feedScroll = 0;      // lines scrolled up from the newest feed entry
+  costBox?: { x: number; y: number; w: number; h: number };
   boardBox?: { x: number; y: number; w: number; h: number };
   planBox?: Rect;
   planSeen?: { seq: number; at: number };   // the plan on screen and since when (^b p/P only act on a plan shown a moment)
@@ -431,7 +435,8 @@ export class Tui {
       if (this.now - at < 2500) continue;
       this.doneCandidates.delete(id);
       const took = this.workingSince.has(id) ? Math.round((at - this.workingSince.get(id)!) / 1000) : 0;
-      this.event(id, '✓', MARK, took >= 5 ? `durdu · ${took} sn çalıştı` : 'durdu');
+      const spent = this.thisJob(id);
+      this.event(id, '✓', MARK, (took >= 5 ? `durdu · ${took} sn çalıştı` : 'durdu') + (spent ? ` · ${spent}` : ''));
       this.sayDone(id, this.now);
     }
   }
@@ -450,7 +455,14 @@ export class Tui {
     this.saidDone.add(id);
     const since = this.workingSince.get(id) ?? 0, orch = this.hub.orchestratorId;
     const rep = [...this.hub.log].reverse().find((m) => m.from === id && m.to === orch && m.ts >= since);
-    this.say(id, doneLine(rep?.text, this.rand), 'done', at);
+    const spent = this.thisJob(id);
+    this.say(id, doneLine(rep?.text, this.rand) + (spent ? ` · ${spent}` : ''), 'done', at);
+  }
+
+  // "bu iş 1.2M token" for a Claude worker (its spend so far); '' when unknown or zero.
+  thisJob(id: string): string {
+    const n = this.hub.agentCost?.(id);
+    return n ? `bu iş ${fmtTokens(n)} token` : '';
   }
 
   // A removed worker stays in the graph until its balloon is gone, then fades and shrinks out (fade-in reversed).
@@ -552,7 +564,8 @@ export class Tui {
       case 'j': case '\x1b[B': case '\x1bOB': move(1); break;
       case 'k': case '\x1b[A': case '\x1bOA': move(-1); break;
       case 'o': if (hub.orchestratorId) hub.setFocus(hub.orchestratorId); else this.openPicker('orchestrator'); break;
-      case 'm': this.showBoard = !this.showBoard; this.prev = []; out.write('\x1b[2J'); break;
+      case 'm': this.showBoard = !this.showBoard; this.showCost = false; this.prev = []; out.write('\x1b[2J'); break;
+      case '$': this.showCost = !this.showCost; this.showBoard = false; this.costAt = 0; this.prev = []; out.write('\x1b[2J'); break;
       case 'l': this.feedHidden = !this.feedHidden; this.saveSoon(); this.prev = []; out.write('\x1b[2J'); break;
       case '<': case '\x1b[D': case '\x1bOD': this.resizeChat(CHAT_SHARE_STEP); break;
       case '>': case '\x1b[C': case '\x1bOC': this.resizeChat(-CHAT_SHARE_STEP); break;
@@ -732,6 +745,7 @@ export class Tui {
       return;
     }
     if (this.boardBox && inside(this.boardBox)) return; // panel swallows clicks
+    if (this.costBox && inside(this.costBox)) return;
     if (this.planBox && inside(this.planBox) && !(this.approvalsBox && inside(this.approvalsBox))) return;
     if (this.approvalsBox && inside(this.approvalsBox)) {
       if (!click) return;
@@ -864,6 +878,48 @@ export class Tui {
     c.segs(2, h - 2, w - 4, [['^b m kapat', DIM]], bg, false);
     c.put(0, h - 1, '╰' + '─'.repeat(w - 2) + '╯', bs);
     this.boardBox = { x, y, w, h };
+    return { c, x, y };
+  }
+
+  // ^b $ : horizontal bars of token spend per agent (most expensive first) + the session total.
+  costPanel(W: number, H: number, G: number): { c: Canvas; x: number; y: number } {
+    if (this.now - this.costAt > 5000) {
+      this.costAt = this.now;
+      setImmediate(() => { try { this.cost = this.hub.costSummary(); } catch {} this.schedule(); });
+    }
+    const cs = this.cost;
+    const rows = (cs?.agents ?? []).filter((r) => r.tokens !== null);
+    const L = this.geo;
+    const w = L.mode === 'cols' ? clamp(L.gw - 2, 24, 110) : clamp(W - 4, 24, 110);
+    const h = clamp(rows.length + 5, 6, Math.max(6, H - G - 3));
+    const x = L.mode === 'cols' ? L.gx + 1 : (W - w - 1 >= 0 ? W - w - 1 : 0), y = G + 1;
+    const c = new Canvas(w, h);
+    const bs = `0;1;${GOLD}`, bg = ';48;5;234';
+    c.put(0, 0, '╭' + '─'.repeat(w - 2) + '╮', bs);
+    c.put(2, 0, ' Maliyet ', bs);
+    for (let i = 1; i < h - 1; i++) { c.put(0, i, '│', bs); c.put(1, i, ' '.repeat(w - 2), `0${bg}`); c.put(w - 1, i, '│', bs); }
+    if (!cs) c.segs(2, 1, w - 4, [['okunuyor…', DIM]], bg, false);
+    else {
+      const tot = cs.total;
+      c.segs(2, 1, w - 4, [['oturum ', DIM], [fmtTokens(tot.tokens) + ' token', '1;39'], ...(tot.usd !== undefined ? [[' · ~' + fmtUsd(tot.usd), '39'] as Seg] : []),
+        [` · giriş ${fmtTokens(tot.tok.in)} çıkış ${fmtTokens(tot.tok.out)} cache ${fmtTokens(tot.tok.cacheWrite)}/${fmtTokens(tot.tok.cacheRead)}`, DIM]], bg, false);
+      const shown = rows.slice(0, h - 5);
+      const max = Math.max(1, ...shown.map((r) => r.tokens!));
+      const idw = Math.min(14, Math.max(4, ...shown.map((r) => r.id.length)));
+      const labels = shown.map((r) => fmtTokens(r.tokens!) + (r.usd !== undefined ? ' ' + fmtUsd(r.usd) : ''));
+      const lw = Math.max(0, ...labels.map((l) => l.length));
+      const bar = Math.max(4, w - 4 - idw - lw - 2);
+      shown.forEach((r, i) => {
+        const n = Math.max(r.tokens! > 0 ? 1 : 0, Math.round((r.tokens! / max) * bar));
+        const col = hex(this.hub.agents.get(r.id)?.profile.color);
+        c.segs(2, 2 + i, w - 4, [[r.id.slice(0, idw).padEnd(idw) + ' ', `1;${col}`], ['█'.repeat(n), col.startsWith('38') ? col : `${col}`], ['░'.repeat(bar - n), DIM], [' ' + labels[i], '39'], ...(r.status === 'exited' || r.status === 'kapatıldı' || r.status === 'oturum kapandı' ? [[' ✓', DIM] as Seg] : [])], bg, false);
+      });
+      if (!rows.length) c.segs(2, 2, w - 4, [['henüz Claude işçisi yok (diğer CLI\'lar için token bilinmiyor)', DIM]], bg, false);
+      if (rows.length > shown.length) c.segs(2, h - 3, w - 4, [[`… ${rows.length - shown.length} agent daha (coban cost)`, DIM]], bg, false);
+    }
+    c.segs(2, h - 2, w - 4, [['^b $ kapat' + (cs && !cs.pricesDefined ? ' · $ için config "prices"' : ''), DIM]], bg, false);
+    c.put(0, h - 1, '╰' + '─'.repeat(w - 2) + '╯', bs);
+    this.costBox = { x, y, w, h };
     return { c, x, y };
   }
 
@@ -1473,6 +1529,8 @@ export class Tui {
     if (!ov) this.pickBox = undefined;
     const bp = this.showBoard && !ov ? this.boardPanel(W, H, full ? 0 : L.p.G) : undefined;
     if (!bp) this.boardBox = undefined;
+    const cp = this.showCost && !ov ? this.costPanel(W, H, full ? 0 : L.p.G) : undefined;
+    if (!cp) this.costBox = undefined;
     this.pending = hub.approvals();
     if (!this.pending.length) this.showApprovals = false;
     const ap = !ov ? this.approvalsPanel(L, H) : undefined;
@@ -1499,7 +1557,7 @@ export class Tui {
       return s;
     };
     const lines: string[] = [];
-    const overlays = [ov, bp, ap, pp].filter((o): o is { c: Canvas; x: number; y: number } => !!o);
+    const overlays = [ov, bp, cp, ap, pp].filter((o): o is { c: Canvas; x: number; y: number } => !!o);
     for (let y = 0; y < H - 1; y++) {
       // overlays covering this row, left to right; an overlay starting inside an earlier one is skipped
       const here = overlays.filter((o) => y >= o.y && y < o.y + o.c.h).sort((p, q) => p.x - q.x);
@@ -1598,7 +1656,7 @@ export class Tui {
     if (hub.confirms.length) left = ' ! ONAY GEREKİYOR · y onayla · n/esc reddet ';
     else if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
     else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
-    else if (this.prefix) left = (hub.plan ? ' ^b → p:planı onayla  P:planı reddet  ·' : '') + ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
+    else if (this.prefix) left = (hub.plan ? ' ^b → p:planı onayla  P:planı reddet  ·' : '') + ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  $:maliyet  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
     else if (hub.plan) left = ` PLAN: ${hub.plan.title} · ${hub.plan.nodes.length} iş · ^b p onayla · ^b P reddet${hub.plan.warnings.length ? ` · ⚠ ${hub.plan.warnings.length} uyarı` : ''}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor` : ''} `;
     else left = ` ^b komut · ${hub.focus || '-'}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor (^b y/a/r${this.geo?.mode === 'stack' ? ', ^b i' : ''})` : ''}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
     const bg = this.prefix || this.mode !== 'normal' || this.selectMode || hub.plan ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
