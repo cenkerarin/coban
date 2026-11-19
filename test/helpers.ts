@@ -52,7 +52,7 @@ export async function startCoban(cols = 200, rows = 46, profiles: Profile[] = [f
   }));
   const env: Record<string, string> = {
     ...(process.env as Record<string, string>),
-    COBAN_CONFIG: path.join(dir, 'config.json'), COBAN_SOCK: sock, COBAN_HISTORY: path.join(dir, 'history.jsonl'),
+    COBAN_FROM_SRC: "1", COBAN_CONFIG: path.join(dir, 'config.json'), COBAN_SOCK: sock, COBAN_HISTORY: path.join(dir, 'history.jsonl'),
     PATH: `${path.join(ROOT, 'bin')}:${path.dirname(process.execPath)}:${process.env.PATH}`,
   };
   delete env.COBAN_AGENT;

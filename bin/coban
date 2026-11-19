@@ -2,7 +2,8 @@
 # Resolve the real script location so symlinks (e.g. ~/.local/bin/coban) work.
 SELF=$(readlink -f "$0" 2>/dev/null || echo "$0")
 ROOT="$(dirname "$SELF")/.."
-if [ -f "$ROOT/dist/cli.js" ]; then
+# COBAN_FROM_SRC=1 forces src/ (tests: a stale dist/ would otherwise be what gets tested).
+if [ -z "$COBAN_FROM_SRC" ] && [ -f "$ROOT/dist/cli.js" ]; then
   ENTRY="$ROOT/dist/cli.js"
 else
   ENTRY="$ROOT/src/cli.ts"
