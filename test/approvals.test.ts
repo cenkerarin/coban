@@ -46,9 +46,9 @@ test('input line: @id goes to that agent, @all to the board', async () => {
   assert.match(c.screen(), /sen → m1/);
   c.write('\r');
   await until(async () => /user→m1: selam/.test(await c.cli('', 'log')));
-  c.write('@all karar: v2'); c.write('\r');
+  c.write('@all karar: v2'); await sleep(150); c.write('\r');   // Enter is its own keystroke: written back-to-back, stdin may merge it into the text chunk, which is then not Enter
   await until(async () => /\[ortak\] user: karar: v2/.test(await c.cli('m2', 'inbox')));
-  c.write('@yok x'); c.write('\r');
+  c.write('@yok x'); await sleep(150); c.write('\r');
   await until(() => /agent yok: @yok/.test(c.screen()), 6000, 20);   // a flash: poll tightly, a fixed sleep can miss the frame
   c.write('\x15\x1b'); // clear, leave the input line
 });

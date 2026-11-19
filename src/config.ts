@@ -67,18 +67,27 @@ export function nextAccount(cfg: Config): { profile: Profile; dir: string } {
   return { profile: claude(n, SONNET, COLORS[(n - 1) % COLORS.length]), dir: path.join(os.homedir(), `.claude-hesap${n}`) };
 }
 
+// Readers (other coban processes, tests) must never see a half-written config: write a tmp file next to it, then rename.
+function writeConfigAtomic(cfg: unknown, mode?: number) {
+  const tmp = `${CONFIG_PATH}.${process.pid}.${Date.now()}.tmp`;
+  try {
+    fs.writeFileSync(tmp, JSON.stringify(cfg, null, 2) + '\n', mode === undefined ? undefined : { mode });
+    fs.renameSync(tmp, CONFIG_PATH);
+  } catch (e) { try { fs.unlinkSync(tmp); } catch {} throw e; }
+}
+
 export function saveLayout(patch: Partial<Pick<Config, 'chatWidth' | 'feedHidden' | 'feedWidth'>>) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
   Object.assign(raw, patch);
   if (raw.feedWidth == null) delete raw.feedWidth;   // null/undefined = back to automatic
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+  writeConfigAtomic(raw);
 }
 export const saveChatWidth = (share: number) => saveLayout({ chatWidth: share });
 
 export function saveRules(rules: ApprovalRule[]) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
   raw.rules = rules;
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n', { mode: 0o600 });
+  writeConfigAtomic(raw, 0o600);
 }
 
 // Anchored on purpose: a rule for `rm -rf build` must never fire for `rm -rf build /`.
@@ -121,7 +130,7 @@ export function ruleMatches(r: ApprovalRule, text: string, cwd: string, profile:
 export function appendProfile(p: Profile) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
   raw.profiles.push(p);
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
+  writeConfigAtomic(raw);
 }
 
 const onPath = (bin: string) =>
@@ -169,7 +178,7 @@ const expand = (v: string) => v.replace(/^~(?=\/|$)/, os.homedir());
 export function loadConfig(): Config {
   if (!fs.existsSync(CONFIG_PATH)) {
     fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(detectConfig(), null, 2) + '\n');
+    writeConfigAtomic(detectConfig());
   }
   const cfg = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;
   for (const p of cfg.profiles) {
