@@ -249,7 +249,7 @@ Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed wi
 chat are forwarded when the agent asks for them.
 
 `ctrl+b` then: `c` input line · `y`/`a`/`r` approve / always / reject · `i` next approval · `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
-`l` toggle feed · `←`/`→` (or `<`/`>`) widen / narrow the chat, arrows repeat for a second without `ctrl+b` (saved as `chatWidth`, 0.3-0.6; the `l` feed toggle is saved as `feedHidden`) · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
+`l` toggle feed · `←`/`→` (or `<`/`>`) widen / narrow the chat, arrows repeat for a second without `ctrl+b` (saved as `chatWidth`, 0.3-0.6; the `l` feed toggle is saved as `feedHidden`) · `[`/`]` narrow / widen the feed, `=` reset widths · **drag** the borders between feed│graph│chat with the mouse (hover highlights, live redraw, saved as `feedWidth`/`chatWidth`; columns keep minimum widths) · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
 `ctrl+b` send a literal ctrl+b.
 
 ## Development
