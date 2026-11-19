@@ -287,6 +287,7 @@ export class Tui {
   feedScroll = 0;      // lines scrolled up from the newest feed entry
   boardBox?: { x: number; y: number; w: number; h: number };
   planBox?: Rect;
+  planSeen?: { seq: number; at: number };   // the plan on screen and since when (^b p/P only act on a plan shown a moment)
   noticeTimer?: NodeJS.Timeout;
   outerAppCursor = false;
   outerMouse = '';
@@ -570,7 +571,10 @@ export class Tui {
         break;
       case 'p': case 'P': {   // pending plan: p starts it, P throws it away (only the human, here or `coban plan --approve`)
         if (!hub.plan) { this.flash('bekleyen plan yok'); break; }
-        try { if (c === 'p') hub.approvePlan(); else hub.rejectPlan(); }
+        // like the confirm box: a plan swapped in right under the keypress is not the one the user decided on
+        const seen = this.planSeen;
+        if (!seen || seen.seq !== hub.plan.seq || Date.now() - seen.at < CONFIRM_GUARD_MS) { this.flash('plan az önce değişti — bak, sonra tekrar bas'); break; }
+        try { if (c === 'p') hub.approvePlan(seen.seq); else hub.rejectPlan(seen.seq); }
         catch (e: any) { this.flash(e.message); }
         break;
       }
@@ -1321,6 +1325,7 @@ export class Tui {
   planPanel(L: Layout, H: number): { c: Canvas; x: number; y: number } | undefined {
     const pl = this.hub.plan;
     if (!pl) return undefined;
+    if (this.planSeen?.seq !== pl.seq) this.planSeen = { seq: pl.seq, at: Date.now() };
     const x = L.gx + 1, w = Math.max(24, L.gw - 2), inner = w - 4;
     const prof = (n: PlanNode) => this.hub.cfg.profiles.find((p) => p.id === n.profile);
     const sub = (n: PlanNode) => (prof(n)?.title ?? n.profile) + (n.worktree ? ' ⎇' : '') + (n.verify ? ' ✓' : '');

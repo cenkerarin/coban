@@ -14,8 +14,8 @@ export type PlanNode = {
   ctx?: string[];                 // applied by the CLI (snippets into task) before the plan reaches the hub
 };
 export type Plan = { title: string; nodes: PlanNode[]; cwd?: string };
-// The one plan waiting for the user's decision (hub.plan); `from` is who sent it.
-export type PendingPlan = Plan & { warnings: string[]; order: string[]; from: string; at: number };
+// The one plan waiting for the user's decision (hub.plan); `from` is who sent it, `seq` binds a decision to it.
+export type PendingPlan = Plan & { warnings: string[]; order: string[]; from: string; at: number; seq: number };
 export type PlanCheck = { errors: string[]; warnings: string[]; order: string[]; plan?: Plan };
 export type PlanEnv = { profiles: string[]; agents?: string[]; reserved?: string[] };
 

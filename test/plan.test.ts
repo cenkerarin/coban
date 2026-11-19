@@ -8,7 +8,7 @@ import path from 'node:path';
 import { execFile } from 'node:child_process';
 import { planDepths, planSummary, topoOrder, validatePlan } from '../src/plan.ts';
 import { Hub } from '../src/hub.ts';
-import { fakeProfile, ROOT, startCoban, until, type Coban } from './helpers.ts';
+import { fakeProfile, ROOT, sleep, startCoban, until, type Coban } from './helpers.ts';
 
 const env = { profiles: ['h1', 'h2'], agents: ['orkestra', 'w0'], reserved: ['user', 'all', 'coban', 'anon'] };
 const node = (id: string, extra: object = {}) => ({ id, profile: 'h1', task: `iş ${id}`, ...extra });
@@ -65,6 +65,7 @@ test('validatePlan: conflict warning only for unordered nodes writing the same p
 
 // ── hub: rights, replace, approve (spawn + queue), reject ──
 const hub = new Hub({ orchestrator: 'fake', profiles: [fakeProfile()] });
+const pending = (h: Hub) => h.plan;   // asserts narrow hub.plan; read it through a call
 let c: Coban | undefined;
 after(async () => { for (const id of [...hub.order]) hub.kill(id); for (const j of [...hub.queue]) hub.kill(j.id); await c?.stop(); });
 
@@ -109,8 +110,31 @@ test('hub: only the user/orchestrator propose, only the user decides; approve sp
   hub.setPlan({ title: 'S', cwd, nodes: [{ id: 's1', profile: 'fake', task: 'x' }] });
   hub.spawn({ profile: 'fake', role: 'worker', name: 's1', task: 'x', cwd });
   assert.throws(() => hub.approvePlan(), /plan artık geçerli değil: .*"s1" adlı bir agent zaten var/);
-  const pending = (h: Hub) => h.plan;   // (the asserts above narrowed hub.plan to undefined)
   assert.equal(pending(hub)?.title, 'S');
+});
+
+test('hub: a decision is bound to the plan the user saw — a plan swapped in meanwhile is not approved', async () => {
+  const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'coban-plan-'));
+  const one = (title: string, id: string) => ({ title, cwd, nodes: [{ id, profile: 'fake', task: 'x' }] });
+  hub.setPlan(one('A', 'ta'));
+  const seenA = hub.plan!.seq;
+  hub.setPlan(one('B', 'tb'));
+  assert.throws(() => hub.approvePlan(seenA), /plan bu arada değişti \(şimdi: "B"\)/);
+  assert.throws(() => hub.rejectPlan(seenA), /bu arada değişti/);
+  assert.equal(hub.plan!.title, 'B');
+
+  // outside terminal (anon): the box shows the pending plan; replaced while it is open → the yes doesn't carry over
+  hub.confirmUI = true;
+  try {
+    const decision = hub.handle('anon', 'plan_approve', { seq: 999 });   // a seq the client states is ignored
+    await until(() => hub.confirms.length === 1, 2000, 10);
+    assert.ok(hub.confirms[0].lines.some((l) => l.includes('B · 1 iş: tb(fake)')), hub.confirms[0].lines.join('\n'));
+    hub.setPlan(one('C', 'tc'));
+    hub.resolveConfirm(hub.confirms[0].id, true);
+    await assert.rejects(decision, /plan bu arada değişti \(şimdi: "C"\)/);
+    assert.ok(!hub.agents.has('tb') && !hub.agents.has('tc') && pending(hub)?.title === 'C');
+  } finally { hub.confirmUI = false; }
+  hub.rejectPlan();
 });
 
 // ── end to end: the real TUI ──
@@ -121,7 +145,7 @@ const run = (args: string[], input: string, e: Record<string, string>, cwd: stri
 
 test('e2e: coban plan → PLAN line, dashed nodes and warning → ^b p starts them; stdin plan → ^b P rejects', async () => {
   c = await startCoban();
-  c.write('\r'); await new Promise((r) => setTimeout(r, 300)); c.write('1');
+  c.write('\r'); await sleep(300); c.write('1');
   await until(async () => (await c!.cli('', 'agents')).includes('★'));
   fs.writeFileSync(path.join(c.dir, 'ctx.ts'), 'export function hello() {\n  return 1;\n}\n');
   fs.writeFileSync(path.join(c.dir, 'plan.json'), JSON.stringify({
@@ -145,6 +169,7 @@ test('e2e: coban plan → PLAN line, dashed nodes and warning → ^b p starts th
   assert.equal(await c.cli('orkestra', 'plan', '--show'), 'PLAN: Demo plan · 3 iş: pa(fake) pb(fake) pc(fake)←pa,pb · 1 uyarı · öneren orkestra · onay bekliyor');
   assert.doesNotMatch(await c.cli('', 'agents'), /^p[abc] /m, 'nothing starts before the approval');
 
+  await sleep(700);   // ^b p only acts on a plan that has been on screen a moment
   c.write('\x02p');
   await until(async () => /^pa .*"iş a İLGİLİ KOD/m.test(await c!.cli('', 'agents')), 10000);   // ctx went into the task
   await until(() => !c!.screen().includes('PLAN: Demo plan'));
@@ -155,6 +180,7 @@ test('e2e: coban plan → PLAN line, dashed nodes and warning → ^b p starts th
   const plan2 = JSON.stringify({ title: 'İkinci', nodes: [{ id: 'qa', profile: 'fake', task: 'iş q' }] });
   assert.match(await c.confirming(run(['plan', '-'], plan2, c.env, c.dir)), /^plan gönderildi: İkinci · 1 iş/);
   await until(() => c!.screen().includes('PLAN: İkinci · 1 iş'));
+  await sleep(700);
   c.write('\x02P');
   await until(() => !c!.screen().includes('PLAN: İkinci'));
   assert.match(await c.cli('', 'log'), /coban→orkestra: plan reddedildi: İkinci/);

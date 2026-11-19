@@ -440,6 +440,7 @@ export class Hub extends EventEmitter {
 
   // ── plan mode: a proposed task graph waits for the user (TUI ^b p / ^b P, or `coban plan --approve|--reject`) ──
   plan?: PendingPlan;   // at most one: a new plan replaces the pending one
+  private planSeq = 0;
 
   private planEnv() {
     return { profiles: this.cfg.profiles.map((p) => p.id), agents: [...this.agents.keys(), ...this.queue.map((j) => j.id)], reserved: [...RESERVED_IDS] };
@@ -450,7 +451,7 @@ export class Hub extends EventEmitter {
     if (chk.errors.length || !chk.plan) throw new Error(`plan geçersiz: ${chk.errors.join(' · ')}`);
     for (const n of chk.plan.nodes) checkVerify(n.verify, this.cfg.verifyAllow);
     const replaced = this.plan?.title;
-    this.plan = { ...chk.plan, warnings: chk.warnings, order: chk.order, from, at: Date.now() };
+    this.plan = { ...chk.plan, warnings: chk.warnings, order: chk.order, from, at: Date.now(), seq: ++this.planSeq };
     this.emit('plan', { kind: 'set', title: this.plan.title, n: this.plan.nodes.length, from });
     this.emit('change');
     return { title: this.plan.title, n: this.plan.nodes.length, warnings: chk.warnings, ...(replaced !== undefined ? { replaced } : {}) };
@@ -458,9 +459,9 @@ export class Hub extends EventEmitter {
 
   // Starts the plan through the usual spawn / queue: nodes without `after` now, the rest queued (topological order,
   // so a dependency always exists before its dependents). Tells the orchestrator (or the user) what started.
-  approvePlan(): { title: string; started: string[]; queued: string[]; failed: string[] } {
-    const pl = this.plan;
-    if (!pl) throw new Error('bekleyen plan yok');
+  // `seq`: the plan the user was shown; if it was replaced since, the decision doesn't carry over to the new one.
+  approvePlan(seq?: number): { title: string; started: string[]; queued: string[]; failed: string[] } {
+    const pl = this.pendingPlan(seq);
     const chk = validatePlan(pl, this.planEnv());   // agents may have come and gone since it was proposed
     if (chk.errors.length) throw new Error(`plan artık geçerli değil: ${chk.errors.join(' · ')} (reddet ve yeniden gönderilsin)`);
     this.plan = undefined;
@@ -482,9 +483,15 @@ export class Hub extends EventEmitter {
     return { title: pl.title, started, queued, failed };
   }
 
-  rejectPlan(): { title: string } {
+  private pendingPlan(seq?: number): PendingPlan {
     const pl = this.plan;
     if (!pl) throw new Error('bekleyen plan yok');
+    if (seq !== undefined && pl.seq !== seq) throw new Error(`plan bu arada değişti (şimdi: "${pl.title}"); yenisine bakıp tekrar karar ver`);
+    return pl;
+  }
+
+  rejectPlan(seq?: number): { title: string } {
+    const pl = this.pendingPlan(seq);
     this.plan = undefined;
     this.post('coban', this.orchestratorId || 'user', `plan reddedildi: ${pl.title} (işçi açılmadı; kullanıcıya neyin değişmesi gerektiğini sor)`);
     this.emit('plan', { kind: 'rejected', title: pl.title, n: pl.nodes.length, from: pl.from });
@@ -852,8 +859,13 @@ export class Hub extends EventEmitter {
   async handle(caller: string, method: string, p: any): Promise<unknown> {
     // Outside CLI (or an agent that dropped its token): user rights only with the human's yes in the TUI.
     if (caller === 'anon' && (USER_ONLY.has(method) || PRIVILEGED.has(method)) && this.confirmUI) {
-      // deciding on a plan: show the plan actually pending, not whatever the request says about it
-      const shown = method === 'plan_approve' || method === 'plan_reject' ? { plan: this.plan ? planSummary(this.plan, this.plan.warnings) : null } : p;
+      // deciding on a plan: show the plan actually pending (not whatever the request says about it) and bind the yes to
+      // it, so a plan swapped in while the box is open is not approved by the yes given for the old one
+      let shown = p;
+      if (method === 'plan_approve' || method === 'plan_reject') {
+        shown = { plan: this.plan ? planSummary(this.plan, this.plan.warnings) : null };
+        p = { seq: this.plan?.seq ?? 0 };
+      }
       if (!(await this.requestConfirm(method, shown))) throw new Error(`${method}: kullanıcı arayüzde onaylamadı`);
       caller = 'user';
     }
@@ -938,8 +950,8 @@ export class Hub extends EventEmitter {
         const pl = this.plan;
         return { plan: pl ? { title: pl.title, nodes: pl.nodes, warnings: pl.warnings, from: pl.from, at: pl.at, summary: planSummary(pl, pl.warnings) } : null };
       }
-      case 'plan_approve': return this.approvePlan();    // user only
-      case 'plan_reject': return this.rejectPlan();      // user only
+      case 'plan_approve': return this.approvePlan(typeof p.seq === 'number' ? p.seq : undefined);   // user only
+      case 'plan_reject': return this.rejectPlan(typeof p.seq === 'number' ? p.seq : undefined);
       default: throw new Error(`bilinmeyen komut: ${method}`);
     }
   }
