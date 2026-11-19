@@ -230,6 +230,33 @@ coban spawn h1 "HEDEF: …" --name api --worktree --verify "npx tsc --noEmit && 
 coban spawn h2 "HEDEF: docs for the new API" --after api
 ```
 
+## Plan mode
+
+For work that needs three or more workers the orchestrator first proposes the whole task graph and waits for you:
+
+```sh
+coban plan plan.json        # or: … | coban plan -
+coban plan --show           # one-line summary of the pending plan
+```
+
+```json
+{ "title": "Auth rewrite", "nodes": [
+  { "id": "api",  "profile": "h1", "task": "HEDEF: …", "files": ["src/auth.ts"], "ctx": ["src/auth.ts#login"] },
+  { "id": "ui",   "profile": "h2", "task": "HEDEF: …", "files": ["src/ui/login.tsx"], "worktree": true },
+  { "id": "docs", "profile": "h2", "task": "HEDEF: …", "after": ["api", "ui"], "verify": "npm test" } ] }
+```
+
+Every node takes the `coban spawn` options as fields (`after`, `worktree`, `verify`; `ctx` is pasted into the task by
+the CLI, like `--ctx`). coban rejects a plan with a duplicate/invalid/taken id, an unknown profile, or an `after` that
+is neither in the plan nor an existing agent or that forms a cycle. It **warns** when two nodes list the same file (or
+a directory and a file in it) in `files`, neither runs after the other (also transitively), and neither has its own
+worktree. One plan is pending at a time; a new one replaces it. While it waits, the graph column shows it under the
+orchestrator — dashed, dimmed nodes by depth, `after` edges, warnings in red — and the status bar reads
+`PLAN: <title> · N iş · ^b p onayla · ^b P reddet`. `ctrl+b p` starts it through the usual spawn/queue (nodes without
+`after` at once, the rest queued) and tells the orchestrator `plan onaylandı, başladı: …`; `ctrl+b P` drops it and
+tells it `plan reddedildi`. Only the orchestrator (or you) may propose; only you decide — in the window, or with
+`coban plan --approve|--reject` from your own terminal (confirmed in the window like other user-rights requests).
+
 ## Keeping context small
 
 Each request an agent makes re-reads its whole context (Claude Code alone is ~45k tokens before any work), so coban
@@ -248,7 +275,7 @@ keeps what lands there lean:
 Mouse: click a bubble to focus it, click `+` to add an agent, scroll the feed with the wheel. Mouse events in the
 chat are forwarded when the agent asks for them.
 
-`ctrl+b` then: `c` input line · `y`/`a`/`r` approve / always / reject · `i` next approval · `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
+`ctrl+b` then: `c` input line · `y`/`a`/`r` approve / always / reject · `i` next approval · `p`/`P` approve / reject the pending plan · `n` new agent · `1-9` select · `j`/`k` next/prev · `o` orchestrator · `m` board panel ·
 `l` toggle feed · `←`/`→` (or `<`/`>`) widen / narrow the chat, arrows repeat for a second without `ctrl+b` (saved as `chatWidth`, 0.3-0.6; the `l` feed toggle is saved as `feedHidden`) · `[`/`]` narrow / widen the feed, `=` reset widths · **drag** the borders between feed│graph│chat with the mouse (hover highlights, live redraw, saved as `feedWidth`/`chatWidth`; columns keep minimum widths) · `s` select mode (release the mouse to copy text) · `u` next unread · `x` close agent · `q` quit ·
 `ctrl+b` send a literal ctrl+b.
 
@@ -265,7 +292,7 @@ See [CONTRIBUTING.md](CONTRIBUTING.md) for how the code is laid out.
 ### Who may do what
 
 Only the user (the `coban` CLI outside an agent) and the orchestrator may call `spawn` (incl. `--worktree` /
-`--verify`), `approve`, `key`, `kill` and `rule`; workers read and message (`post`, `send`, `inbox`, `board`,
+`--verify`), `approve`, `key`, `kill`, `rule` and `plan`; approving or rejecting a plan is the user's alone; workers read and message (`post`, `send`, `inbox`, `board`,
 `agents`, `read`, `map`, `wait`), so a worker cannot approve its own permission prompt. OpenCode workers get a
 prompt-free allow only for those read/messaging subcommands. When an agent can't work, the orchestrator is told a
 fixed category (no login / expired token / provider rejected), never the raw screen line (shown to you in the feed).
