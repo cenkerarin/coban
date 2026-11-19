@@ -613,6 +613,15 @@ export class Tui {
   composeKey(d: string) {
     const paste = d.match(/^\x1b\[200~([\s\S]*)\x1b\[201~$/);
     if (paste) { this.draft += paste[1].replace(/\r\n?/g, '\n'); return this.schedule(); }
+    // Outside bracketed paste, a read can carry text and Enter together ("hi\r", or "a\rb" from fast typing/pipes):
+    // text before the Enter goes into the draft, the Enter sends, whatever follows is the next input.
+    const cr = d.indexOf('\r');
+    if (cr > 0 && !d.startsWith('\x1b')) {
+      this.composeKey(d.slice(0, cr));
+      this.composeKey('\r');
+      if (this.composing && cr + 1 < d.length) this.composeKey(d.slice(cr + 1));
+      return;
+    }
     if (d === '\x1b') this.composing = false;
     else if (d === '\r') this.send();
     else if (d === '\x7f' || d === '\b') this.draft = [...this.draft].slice(0, -1).join('');
