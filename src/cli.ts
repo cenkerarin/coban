@@ -3,7 +3,7 @@ import fs from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import { appendProfile, CONFIG_PATH, loadConfig, nextAccount, ruleRegex, saveRules, SOCK, type ApprovalRule } from './config.ts';
 import { repoMap, snippets } from './context.ts';
-import { allUsage, fmtEta, fmtTokens, type AccountUsage } from './usage.ts';
+import { allUsage, fmtEta, fmtTokens, renderCost, type AccountUsage } from './usage.ts';
 import { readHistory } from './history.ts';
 
 const HELP = `coban — çok hesaplı agent orkestratörü
@@ -40,6 +40,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban inbox                         özel mesajlar + ortak kutudaki yeniler
   coban board [--limit n]             ortak kutunun son notları
   coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
+  coban cost [--json]                 oturum maliyeti: agent başına token (config'te "prices" varsa $), hesap/plan toplamı
   coban log [--limit n]
   coban history [--limit n]           kalıcı oturum geçmişi (olaylar + mesajlar, ~/.coban/history.jsonl)
   coban export [--out dosya.md]         geçmişi Markdown rapora çevirir (zaman çizelgesi, işçi tablosu, kararlar)
@@ -285,6 +286,10 @@ async function main() {
         : [u.profileId, `5s ${Math.round(u.pct5h * 100)}% (${tok(u.used5h)}/${tok(u.limit5h)})`, `7g ${tok(u.used7d)}`,
           u.resetAt ? `reset ${new Date(u.resetAt).toTimeString().slice(0, 5)}` : 'reset -', u.limited ? 'LİMİTLİ' : ''].filter(Boolean).join('  ');
       return print(r, () => r.usage.map(line).join('\n'));
+    }
+    case 'cost': {
+      const r = await call('cost', {});
+      return print(r, () => renderCost(r));
     }
     case 'plan': {
       if (flags.show) {

@@ -27,6 +27,7 @@ export type Config = {
   rules?: ApprovalRule[];        // standing approvals, see `coban rule`; none by default
   verifyAllow?: string[];        // spawn --verify: when set, only commands fully matching one of these regexes may run
   verifyTries?: number;          // spawn --verify: how many failed runs are sent back to the worker before giving up (default 3)
+  prices?: Record<string, { in: number; out: number; cacheRead: number }>;   // optional USD per 1M tokens by model (exact id or a substring like "sonnet"); without it `coban cost` shows tokens only
   profiles: Profile[];
 };
 

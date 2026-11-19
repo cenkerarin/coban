@@ -3,7 +3,9 @@ import path from 'node:path';
 import { STATE_DIR } from './config.ts';
 
 // Persistent session history: one JSON object per line (feed events and messages), newest last.
-export type HistoryEntry = { ts: number; kind: 'event' | 'msg'; id: string; text: string; to?: string; detail?: string };
+export type CostEvent = { profile: string; model: string; role: string; status: string; ms: number; in: number; out: number; cacheWrite: number; cacheRead: number; usd?: number; plan?: string };
+// kind 'cost': an agent's final token spend (written once when it exits or is killed); `cost` carries the numbers.
+export type HistoryEntry = { ts: number; kind: 'event' | 'msg' | 'cost'; id: string; text: string; to?: string; detail?: string; cost?: CostEvent };
 
 export const historyPath = () => process.env.COBAN_HISTORY || path.join(STATE_DIR, 'history.jsonl');
 const MAX_BYTES = 5_000_000; // rotate to history.jsonl.1 beyond this

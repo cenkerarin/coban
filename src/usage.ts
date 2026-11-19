@@ -24,7 +24,13 @@ const WINDOW_7D = 7 * 24 * 3600_000;
 // Rough per-5h budget (tokens) when the profile sets no limit5h. Plans differ; tune it in config.json.
 export const DEFAULT_LIMIT_5H = 5_000_000;
 
-type Entry = { ts: number; tokens: number };
+// Token split of one API message (or a sum of them). `used` figures elsewhere = in + out + cacheWrite.
+export type Tok = { in: number; out: number; cacheWrite: number; cacheRead: number };
+export const ZERO_TOK = (): Tok => ({ in: 0, out: 0, cacheWrite: 0, cacheRead: 0 });
+export const addTok = (a: Tok, b: Tok): Tok => ({ in: a.in + b.in, out: a.out + b.out, cacheWrite: a.cacheWrite + b.cacheWrite, cacheRead: a.cacheRead + b.cacheRead });
+export const tokTotal = (t: Tok) => t.in + t.out + t.cacheWrite;   // same definition of "spent" as AccountUsage.used*
+
+type Entry = { ts: number; tokens: number; tok: Tok };
 type FileCache = { mtime: number; size: number; entries: Map<string, Entry> };
 const cache = new Map<string, FileCache>(); // keeps hub-side re-scans cheap
 
@@ -56,10 +62,11 @@ function readFile(f: string): Map<string, Entry> {
     try { d = JSON.parse(line); } catch { continue; }
     const u = d?.message?.usage;
     if (d.type !== 'assistant' || !u) continue;
-    const tokens = (u.input_tokens ?? 0) + (u.output_tokens ?? 0) + (u.cache_creation_input_tokens ?? 0);
+    const tok: Tok = { in: u.input_tokens ?? 0, out: u.output_tokens ?? 0, cacheWrite: u.cache_creation_input_tokens ?? 0, cacheRead: u.cache_read_input_tokens ?? 0 };
+    const tokens = tokTotal(tok);
     const key = d.message.id ?? d.requestId ?? d.uuid;
     const prev = entries.get(key);
-    if (!prev || tokens > prev.tokens) entries.set(key, { ts: Date.parse(d.timestamp), tokens });
+    if (!prev || tokens > prev.tokens) entries.set(key, { ts: Date.parse(d.timestamp), tokens, tok });
   }
   cache.set(f, { mtime: st.mtimeMs, size: st.size, entries });
   return entries;
@@ -103,12 +110,12 @@ const encodeCwd = (cwd: string) => cwd.replace(/[^a-zA-Z0-9]/g, '-');
 
 // Tokens one worker has spent: its project's logs since it started. Approximate when several agents of the
 // same account share a cwd (they are counted together). null = unknown (non-Claude CLI).
-export function agentTokens(p: Profile, cwd: string, since: number, now = Date.now()): number | null {
+export function agentBreakdown(p: Profile, cwd: string, since: number, now = Date.now()): Tok | null {
   if (!isClaude(p)) return null;
   let real = cwd;
   try { real = fs.realpathSync(cwd); } catch {}
   const seen = new Set<string>();
-  let total = 0;
+  let total = ZERO_TOK();
   for (const c of new Set([cwd, real])) {
     for (const f of jsonlFiles(path.join(configDir(p), 'projects', encodeCwd(c)), since)) {
       let entries: Map<string, Entry>;
@@ -116,11 +123,69 @@ export function agentTokens(p: Profile, cwd: string, since: number, now = Date.n
       for (const [id, e] of entries) {
         if (e.ts < since || e.ts > now || seen.has(id)) continue;
         seen.add(id);
-        total += e.tokens;
+        total = addTok(total, e.tok);
       }
     }
   }
   return total;
+}
+export function agentTokens(p: Profile, cwd: string, since: number, now = Date.now()): number | null {
+  const b = agentBreakdown(p, cwd, since, now);
+  return b && tokTotal(b);
+}
+
+// ── cost: pure aggregation (the hub gathers the rows, this sums them) ──
+// Prices come only from config.prices (USD per 1M tokens); nothing is hard-coded. cache writes are priced like input.
+export type Price = { in: number; out: number; cacheRead: number };
+export type Prices = Record<string, Price>;
+
+// Exact model key first, else the longest key the model id contains (so "claude-sonnet-5-5" matches a "sonnet" entry).
+export function priceFor(prices: Prices | undefined, model: string | undefined): Price | undefined {
+  if (!prices || !model) return undefined;
+  if (prices[model]) return prices[model];
+  const k = Object.keys(prices).filter((x) => x && model.includes(x)).sort((a, b) => b.length - a.length)[0];
+  return k ? prices[k] : undefined;
+}
+export const usd = (t: Tok, pr: Price) => ((t.in + t.cacheWrite) * pr.in + t.out * pr.out + t.cacheRead * pr.cacheRead) / 1e6;
+export const fmtUsd = (n: number) => '$' + (n >= 100 ? n.toFixed(0) : n >= 1 ? n.toFixed(2) : n.toFixed(3));
+
+export type CostInput = {
+  id: string; profile: string; model: string; role: string; status: string; startedAt: number; endedAt?: number;
+  tok: Tok | null;    // null = unknown (non-Claude CLI)
+  plan?: string;      // title of the approved plan this worker came from
+};
+export type CostRow = CostInput & { ms: number; tokens: number | null; usd?: number };
+export type CostGroup = { key: string; agents: number; tokens: number; tok: Tok; usd?: number };
+export type CostSummary = {
+  pricesDefined: boolean;
+  total: { tokens: number; tok: Tok; usd?: number };
+  agents: CostRow[];        // most expensive first
+  accounts: CostGroup[];    // per profile
+  plans: CostGroup[];       // per approved plan
+};
+
+export function buildCost(rows: CostInput[], prices?: Prices, now = Date.now()): CostSummary {
+  const pricesDefined = !!prices && Object.keys(prices).length > 0;
+  const agents: CostRow[] = rows.map((r) => {
+    const pr = pricesDefined && r.tok ? priceFor(prices, r.model) : undefined;
+    return { ...r, ms: Math.max(0, (r.endedAt ?? now) - r.startedAt), tokens: r.tok ? tokTotal(r.tok) : null, ...(pr && r.tok ? { usd: usd(r.tok, pr) } : {}) };
+  }).sort((a, b) => (b.tokens ?? -1) - (a.tokens ?? -1));
+  const group = (keyOf: (r: CostRow) => string | undefined): CostGroup[] => {
+    const m = new Map<string, CostGroup>();
+    for (const r of agents) {
+      const key = keyOf(r);
+      if (key === undefined) continue;
+      const g = m.get(key) ?? { key, agents: 0, tokens: 0, tok: ZERO_TOK() };
+      g.agents++;
+      if (r.tok) { g.tok = addTok(g.tok, r.tok); g.tokens = tokTotal(g.tok); }
+      if (r.usd !== undefined) g.usd = (g.usd ?? 0) + r.usd;
+      m.set(key, g);
+    }
+    return [...m.values()].sort((a, b) => b.tokens - a.tokens);
+  };
+  let tok = ZERO_TOK(), sum: number | undefined;
+  for (const r of agents) { if (r.tok) tok = addTok(tok, r.tok); if (r.usd !== undefined) sum = (sum ?? 0) + r.usd; }
+  return { pricesDefined, total: { tokens: tokTotal(tok), tok, ...(sum !== undefined ? { usd: sum } : {}) }, agents, accounts: group((r) => r.profile), plans: group((r) => r.plan) };
 }
 
 export type Forecast = { remaining: number; remainPct: number; etaMs: number | null };
@@ -135,3 +200,25 @@ export function forecast(u: AccountUsage): Forecast | null {
 
 export const fmtTokens = (n: number) => (n >= 1e6 ? (n / 1e6).toFixed(1) + 'M' : n >= 1e3 ? Math.round(n / 1e3) + 'k' : String(n));
 export const fmtEta = (ms: number | null) => (ms === null ? '' : ms >= 3600_000 ? `~${(ms / 3600_000).toFixed(1)}s` : `~${Math.max(1, Math.round(ms / 60_000))}dk`);
+
+const dur = (ms: number) => { const s = Math.round(ms / 1000); return s >= 3600 ? `${Math.floor(s / 3600)}sa${Math.floor((s % 3600) / 60)}dk` : s >= 60 ? `${Math.floor(s / 60)}dk${s % 60}sn` : `${s}sn`; };
+const short = (m: string) => m.replace(/^claude-/, '');
+
+// Text table for `coban cost`; the $ column and totals appear only when prices are configured.
+export function renderCost(c: CostSummary): string {
+  const usdCol = c.pricesDefined && c.agents.some((r) => r.usd !== undefined);
+  const hasPlan = c.agents.some((r) => r.plan);
+  const head = ['id', 'profil/model', 'süre', 'token', ...(usdCol ? ['$'] : []), 'durum', ...(hasPlan ? ['plan'] : [])];
+  const rows = c.agents.map((r) => [r.id, r.profile + (r.model ? '/' + short(r.model) : ''), dur(r.ms), r.tokens === null ? '-' : fmtTokens(r.tokens),
+    ...(usdCol ? [r.usd !== undefined ? fmtUsd(r.usd) : '-'] : []), r.status, ...(hasPlan ? [r.plan ?? '-'] : [])]);
+  const w = head.map((h, i) => Math.max(h.length, ...rows.map((r) => r[i].length)));
+  const line = (r: string[]) => r.map((x, i) => x.padEnd(w[i])).join('  ').trimEnd();
+  const split = (t: Tok) => `giriş ${fmtTokens(t.in)} · çıkış ${fmtTokens(t.out)} · cache yaz. ${fmtTokens(t.cacheWrite)} · cache okuma ${fmtTokens(t.cacheRead)}`;
+  const out = [`OTURUM TOPLAMI: ${fmtTokens(c.total.tokens)} token${c.total.usd !== undefined ? ` · ~${fmtUsd(c.total.usd)}` : ''}  (${split(c.total.tok)})`];
+  if (!c.pricesDefined) out.push('($ gösterilmiyor: config.json\'a "prices": {"<model>": {"in", "out", "cacheRead"}} (USD/1M token) ekle)');
+  if (rows.length) out.push('', line(head), ...rows.map(line));
+  const grp = (g: CostGroup) => `${g.key}: ${fmtTokens(g.tokens)} token${g.usd !== undefined ? ` · ~${fmtUsd(g.usd)}` : ''} (${g.agents} agent)`;
+  if (c.accounts.length) out.push('', 'HESAP BAŞINA', ...c.accounts.map((g) => '  ' + grp(g)));
+  if (c.plans.length) out.push('', 'PLAN', ...c.plans.map((g) => '  ' + grp(g)));
+  return out.join('\n');
+}
