@@ -10,6 +10,7 @@ import { agentTokens, allUsage, forecast, isClaude, type AccountUsage } from './
 import { appendHistory, readHistory, type HistoryEntry } from './history.ts';
 import { answerKeys, parsePrompt, pickOption, type Choice, type Prompt } from './prompt.ts';
 import { addWorktree, checkVerify, mergeWorktree, removeWorktree, runVerify, tail, type Job, type Queued } from './orch.ts';
+import { planSummary, validatePlan, type PendingPlan } from './plan.ts';
 
 const q = (s: string) => `'${s.replace(/'/g, `'\\''`)}'`;
 const CLEAN_EXIT = [0, 130, 143];
@@ -27,9 +28,9 @@ const SETTLED: Status[] = ['idle', 'blocked', 'limited', 'error', 'exited'];
 // coban subcommands a worker may run without asking: reading and messaging only.
 export const WORKER_COMMANDS = ['post', 'send', 'inbox', 'board', 'agents', 'read', 'map', 'wait'];
 // RPC methods that act on other agents or widen permissions: only the user or the orchestrator may call them.
-const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm']);
-// RPC methods only the human may call (user token): permissions and other agents' credentials.
-const USER_ONLY = new Set(['rule_add', 'rule_rm', 'agent_token']);
+const PRIVILEGED = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm', 'plan_set']);
+// RPC methods only the human may call (user token): permissions, other agents' credentials, deciding on a plan.
+const USER_ONLY = new Set(['rule_add', 'rule_rm', 'agent_token', 'plan_approve', 'plan_reject']);
 // Agent-authored message text, made safe to paste into another agent: NFKC + no invisible format characters (so
 // "[\u200bcoban" can't slip past), "[coban" defused, and every line after the first quoted with "  » " so nothing in
 // it starts a line of its own (coban's framing "[coban mesajı · from → to]" always starts a line).
@@ -52,6 +53,7 @@ export function describeRequest(method: string, p: any): string[] {
     spawn: ['profile', 'name', 'cwd', 'after', 'worktree', 'verify', 'task'],
     approve: ['id', 'choice'], key: ['id', 'keys'], kill: ['id', 'removeWorktree'], merge: ['id', 'cwd', 'test', 'remove'],
     rule_add: ['match', 'cwd', 'profile'], rule_rm: ['n'], agent_token: ['id'],
+    plan_set: ['title', 'cwd', 'nodes'], plan_approve: ['plan'], plan_reject: ['plan'],
   };
   for (const k of fields[method] ?? Object.keys(p ?? {})) if (p?.[k] !== undefined) out.push(`${k}: ${v(p[k])}`);
   if (method === 'agent_token') out.push('(bu agent adına komut çalıştırma yetkisi verir)');
@@ -86,6 +88,7 @@ const ORCH_PROMPT = (id: string, profiles: Profile[]) => `Sen "coban" adlı term
   coban spawn <profil> "<görev>" [--name ad] [--cwd dizin] [--ctx yer]...
                                        --ctx "dosya#sembol1,sembol2" | "dosya:10-80" | "dosya": o kodu satır numaralı olarak görevin içine ekler
                                        --after id1,id2: onlar bitince başlar (kuyruk) · --worktree[=dal]: ayrı git worktree'de çalışır · --verify "<komut>": işçi durunca coban komutu koşar, başarısızsa çıktıyı işçiye geri yollar
+  coban plan <plan.json | ->            görev grafiğini kullanıcı onayına sunar; JSON: {"title":"…","nodes":[{"id","profile","task","after":[id],"files":[yol],"worktree":true|"dal","verify":"…","ctx":["dosya#sembol"]}]} (after/files/worktree/verify/ctx isteğe bağlı) · coban plan --show
   coban send <id> "<mesaj>" [--ctx yer]...   meşgulse boşalınca iletilir
   coban wait [id...] [--timeout 600]   bir işçi durunca veya sana mesaj gelince döner
   coban read <id> [--lines 20]         işçinin ekranının son satırları (arayüz süsleri ayıklanmış)
@@ -120,6 +123,7 @@ GÖREV NASIL YAZILIR — işçinin her isteği ~45k'lık sabit bağlamı yeniden
 - İşi biten işçiyi \`coban kill\` ile kapat. Alakasız yeni bir iş için eski işçiyi kullanma, yeni işçi aç.
 
 Kurallar:
+- 3 veya daha fazla işçili işlerde işçileri tek tek açma: önce \`coban plan\` ile görev grafiğini gönder (files'a her işçinin yazacağı dosyaları yaz; coban çakışmaları uyarır), sonra \`coban wait\` ile kullanıcının kararını bekle. Onaylanırsa coban işçileri kendisi açar (after'lılar kuyruğa) ve sana "plan onaylandı, başladı: …" yazar; "plan reddedildi" gelirse kullanıcıya neyin değişmesi gerektiğini sor.
 - Aynı dosyalara yazacak iki işçi açma; gerekiyorsa ayrı git worktree kullandır.
 - Ağır kod işini Opus profillerine, okuma/inceleme/küçük işleri Sonnet profillerine ver; hesapları dengeli kullan: iş vermeden önce \`coban usage\` bak ve işi (uygun modeldeki) EN AZ HARCAMIŞ hesaba ver. "limited" olan işçiyi coban otomatik olarak en az harcamış uygun hesaba devreder (<eski>-devir); sen sadece gelen devir bildirimini doğrula, uygun hesap yoksa kullanıcıya bildir.
 - "error" = agent hiç çalışamıyor (çıkış yapılmış hesap, süresi dolmuş token, sağlayıcı isteği reddediyor). Kendiliğinden düzelmez: görevi başka profile ver, işçiyi kapat, kullanıcıya hangi hesabın sorunlu olduğunu söyle.
@@ -432,6 +436,60 @@ export class Hub extends EventEmitter {
       }
       return; // spawn/post emitted 'change' and drained the rest
     }
+  }
+
+  // ── plan mode: a proposed task graph waits for the user (TUI ^b p / ^b P, or `coban plan --approve|--reject`) ──
+  plan?: PendingPlan;   // at most one: a new plan replaces the pending one
+
+  private planEnv() {
+    return { profiles: this.cfg.profiles.map((p) => p.id), agents: [...this.agents.keys(), ...this.queue.map((j) => j.id)], reserved: [...RESERVED_IDS] };
+  }
+
+  setPlan(raw: unknown, from = 'user'): { title: string; n: number; warnings: string[]; replaced?: string } {
+    const chk = validatePlan(raw, this.planEnv());
+    if (chk.errors.length || !chk.plan) throw new Error(`plan geçersiz: ${chk.errors.join(' · ')}`);
+    for (const n of chk.plan.nodes) checkVerify(n.verify, this.cfg.verifyAllow);
+    const replaced = this.plan?.title;
+    this.plan = { ...chk.plan, warnings: chk.warnings, order: chk.order, from, at: Date.now() };
+    this.emit('plan', { kind: 'set', title: this.plan.title, n: this.plan.nodes.length, from });
+    this.emit('change');
+    return { title: this.plan.title, n: this.plan.nodes.length, warnings: chk.warnings, ...(replaced !== undefined ? { replaced } : {}) };
+  }
+
+  // Starts the plan through the usual spawn / queue: nodes without `after` now, the rest queued (topological order,
+  // so a dependency always exists before its dependents). Tells the orchestrator (or the user) what started.
+  approvePlan(): { title: string; started: string[]; queued: string[]; failed: string[] } {
+    const pl = this.plan;
+    if (!pl) throw new Error('bekleyen plan yok');
+    const chk = validatePlan(pl, this.planEnv());   // agents may have come and gone since it was proposed
+    if (chk.errors.length) throw new Error(`plan artık geçerli değil: ${chk.errors.join(' · ')} (reddet ve yeniden gönderilsin)`);
+    this.plan = undefined;
+    const by = new Map(pl.nodes.map((n) => [n.id, n]));
+    const started: string[] = [], queued: string[] = [], failed: string[] = [];
+    for (const id of chk.order) {
+      const n = by.get(id)!;
+      const worktree: string | true | undefined = n.worktree === true ? true : typeof n.worktree === 'string' ? n.worktree : undefined;
+      const o = { profile: n.profile, task: n.task, name: n.id, cwd: pl.cwd, worktree, verify: n.verify };
+      try {
+        if (n.after?.length) { this.enqueue({ ...o, after: n.after }); queued.push(`${id} (← ${n.after.join(', ')})`); }
+        else { this.spawn({ ...o, role: 'worker' }); started.push(id); }
+      } catch (e: any) { failed.push(`${id}: ${e?.message ?? e}`); }
+    }
+    this.post('coban', this.orchestratorId || 'user', `plan onaylandı, başladı: ${started.join(', ') || '-'}` +
+      (queued.length ? ` · kuyrukta: ${queued.join(', ')}` : '') + (failed.length ? ` · başlatılamadı: ${failed.join('; ')}` : ''));
+    this.emit('plan', { kind: 'approved', title: pl.title, n: pl.nodes.length, from: pl.from });
+    this.emit('change');
+    return { title: pl.title, started, queued, failed };
+  }
+
+  rejectPlan(): { title: string } {
+    const pl = this.plan;
+    if (!pl) throw new Error('bekleyen plan yok');
+    this.plan = undefined;
+    this.post('coban', this.orchestratorId || 'user', `plan reddedildi: ${pl.title} (işçi açılmadı; kullanıcıya neyin değişmesi gerektiğini sor)`);
+    this.emit('plan', { kind: 'rejected', title: pl.title, n: pl.nodes.length, from: pl.from });
+    this.emit('change');
+    return { title: pl.title };
   }
 
   // ── verify gate: run the worker's `--verify` command when it settles; on failure send it the output's tail ──
@@ -794,7 +852,9 @@ export class Hub extends EventEmitter {
   async handle(caller: string, method: string, p: any): Promise<unknown> {
     // Outside CLI (or an agent that dropped its token): user rights only with the human's yes in the TUI.
     if (caller === 'anon' && (USER_ONLY.has(method) || PRIVILEGED.has(method)) && this.confirmUI) {
-      if (!(await this.requestConfirm(method, p))) throw new Error(`${method}: kullanıcı arayüzde onaylamadı`);
+      // deciding on a plan: show the plan actually pending, not whatever the request says about it
+      const shown = method === 'plan_approve' || method === 'plan_reject' ? { plan: this.plan ? planSummary(this.plan, this.plan.warnings) : null } : p;
+      if (!(await this.requestConfirm(method, shown))) throw new Error(`${method}: kullanıcı arayüzde onaylamadı`);
       caller = 'user';
     }
     if (USER_ONLY.has(method) && caller !== 'user') throw new Error(`${method} yalnız kullanıcıdan (agent içinden değil)`);
@@ -873,6 +933,13 @@ export class Hub extends EventEmitter {
         return mergeWorktree(path.resolve(p.cwd || process.cwd()), job, { test: p.test !== false, remove: !!p.remove });
       }
       case 'log': return { messages: this.log.slice(-(p.limit ?? 30)) };
+      case 'plan_set': return this.setPlan(p, caller);   // user or orchestrator (PRIVILEGED)
+      case 'plan_show': {
+        const pl = this.plan;
+        return { plan: pl ? { title: pl.title, nodes: pl.nodes, warnings: pl.warnings, from: pl.from, at: pl.at, summary: planSummary(pl, pl.warnings) } : null };
+      }
+      case 'plan_approve': return this.approvePlan();    // user only
+      case 'plan_reject': return this.rejectPlan();      // user only
       default: throw new Error(`bilinmeyen komut: ${method}`);
     }
   }

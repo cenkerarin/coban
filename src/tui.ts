@@ -4,6 +4,7 @@ import { fmtTokens, type AccountUsage } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
 import { saveLayout } from './config.ts';
 import { McpWatch } from './mcp.ts';
+import { planDepths, type PlanNode } from './plan.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -285,6 +286,7 @@ export class Tui {
   approvalHits: { x0: number; x1: number; y: number; id: string; choice?: Choice }[] = [];
   feedScroll = 0;      // lines scrolled up from the newest feed entry
   boardBox?: { x: number; y: number; w: number; h: number };
+  planBox?: Rect;
   noticeTimer?: NodeJS.Timeout;
   outerAppCursor = false;
   outerMouse = '';
@@ -334,6 +336,10 @@ export class Tui {
     hub.on('stuck', (s: { id: string; minutes: number }) => this.event(s.id, '⌛', STATUS_STYLE.blocked[1], `takıldı · ${s.minutes} dk ekran değişmedi`));
     hub.on('unstuck', (s: { id: string }) => this.event(s.id, '●', STATUS_STYLE.working[1], 'yeniden ilerliyor'));
     hub.on('notify', (m: Msg) => this.flash(`✉ ${m.from}: ${flat(m.text)}`, 15000));
+    hub.on('plan', (e: { kind: 'set' | 'approved' | 'rejected'; title: string; n: number; from: string }) => {
+      if (e.kind === 'set') this.event(e.from, '◇', GOLD, `plan önerdi: ${e.title} · ${e.n} iş`, '^b p onayla · ^b P reddet');
+      else this.event('user', e.kind === 'approved' ? '◆' : '✗', e.kind === 'approved' ? MARK : DIM, `plan ${e.kind === 'approved' ? 'onaylandı' : 'reddedildi'}: ${e.title}`);
+    });
   }
 
   get paneSize() {
@@ -562,6 +568,12 @@ export class Tui {
         else if (this.pending.length > 1) this.approvalSel = (this.approvalSel + 1) % this.pending.length;
         else if (this.geo?.mode === 'stack') this.showApprovals = false;
         break;
+      case 'p': case 'P': {   // pending plan: p starts it, P throws it away (only the human, here or `coban plan --approve`)
+        if (!hub.plan) { this.flash('bekleyen plan yok'); break; }
+        try { if (c === 'p') hub.approvePlan(); else hub.rejectPlan(); }
+        catch (e: any) { this.flash(e.message); }
+        break;
+      }
       case 'u': { const u = hub.order.find((id) => hub.agents.get(id)!.unread); if (u) hub.setFocus(u); break; }
       case 'x': {
         const a = hub.agents.get(hub.focus);
@@ -707,6 +719,7 @@ export class Tui {
       return;
     }
     if (this.boardBox && inside(this.boardBox)) return; // panel swallows clicks
+    if (this.planBox && inside(this.planBox) && !(this.approvalsBox && inside(this.approvalsBox))) return;
     if (this.approvalsBox && inside(this.approvalsBox)) {
       if (!click) return;
       const h = this.approvalHits.find((r) => r.y === y && x >= r.x0 && x < r.x1);
@@ -1302,6 +1315,94 @@ export class Tui {
     return { c, x, y };
   }
 
+  // The pending plan (`coban plan`) under the orchestrator: nodes dashed and dimmed, one row per depth (wrapped to the
+  // width), `after` edges drawn between adjacent rows (each child gets its own lane row; a line crossing a lane it
+  // doesn't join is drawn straight through), other dependencies as "← id" in the node. Warnings in red.
+  planPanel(L: Layout, H: number): { c: Canvas; x: number; y: number } | undefined {
+    const pl = this.hub.plan;
+    if (!pl) return undefined;
+    const x = L.gx + 1, w = Math.max(24, L.gw - 2), inner = w - 4;
+    const prof = (n: PlanNode) => this.hub.cfg.profiles.find((p) => p.id === n.profile);
+    const sub = (n: PlanNode) => (prof(n)?.title ?? n.profile) + (n.worktree ? ' ⎇' : '') + (n.verify ? ' ✓' : '');
+    const bw = clamp(Math.max(...pl.nodes.map((n) => Math.max(n.id.length, [...sub(n)].length))) + 4, 10, Math.max(10, Math.min(28, inner)));
+    const pitch = bw + 1, perRow = Math.max(1, Math.floor((inner + 1) / pitch));
+    const depth = planDepths(pl.nodes);
+    const rows: PlanNode[][] = [];
+    for (let d = 0; d <= Math.max(0, ...depth.values()); d++) {
+      const level = pl.nodes.filter((n) => depth.get(n.id) === d);
+      for (let i = 0; i < level.length; i += perRow) rows.push(level.slice(i, i + perRow));
+    }
+    const rowOf = new Map<string, number>(), xOf = new Map<string, number>();
+    rows.forEach((row, r) => {
+      const start = 2 + Math.max(0, Math.floor((inner - (row.length * pitch - 1)) / 2));
+      row.forEach((n, i) => { rowOf.set(n.id, r); xOf.set(n.id, start + i * pitch); });
+    });
+    // edges leave a box just left of its centre and enter just right of it: rows share a pitch and are centred, so a
+    // parent's line and a child's line can never fall on the same column (no overlapping verticals)
+    const ax = (id: string) => xOf.get(id)! + Math.floor(bw / 2) + 1, bx = (id: string) => ax(id) - 2;
+    const drawn = (n: PlanNode) => (n.after ?? []).filter((d) => rowOf.get(d) === rowOf.get(n.id)! - 1);
+    const other = (n: PlanNode) => (n.after ?? []).filter((d) => rowOf.get(d) !== rowOf.get(n.id)! - 1);
+    const lanes = rows.map((row, r) => (r ? row.filter((n) => drawn(n).length).sort((a, b) => ax(a.id) - ax(b.id)) : []));
+    const bh = pl.nodes.some((n) => other(n).length) ? 5 : 4;
+    const rowY: number[] = [];
+    rows.forEach((_, r) => rowY.push(r ? rowY[r - 1] + bh + Math.max(1, lanes[r].length) : 2));
+
+    const warn = pl.warnings.slice(0, 3).flatMap((t) => { const s = '⚠ ' + t; return s.length > inner ? [s.slice(0, inner), fit('  ' + s.slice(inner), inner)] : [s]; });
+    if (pl.warnings.length > 3) warn.push(`+${pl.warnings.length - 3} uyarı daha (coban plan --show)`);
+    const tail = 2 + warn.length;   // blank row, warnings, bottom border (with the keys on it)
+    let k = rows.length;   // rows that fit above the status bar
+    while (k > 0 && rowY[k - 1] + bh + tail + (k < rows.length ? 1 : 0) > H - 1) k--;
+    const hidden = rows.slice(k).reduce((s, r) => s + r.length, 0);
+    const end = k ? rowY[k - 1] + bh : 2;
+    const h = end + tail + (hidden ? 1 : 0);
+    const y = clamp(this.orchJoint[1] + 1, 0, Math.max(0, H - 1 - h));
+
+    const c = new Canvas(w, h);
+    c.lineSgr = `0;${DIM}`;
+    const bs = `0;${GOLD}`;
+    c.put(0, 0, '╭' + '┄'.repeat(w - 2) + '╮', bs);
+    c.put(2, 0, ' PLAN: ', `0;1;${GOLD}`);
+    c.put(9, 0, fit(`${pl.title} · ${pl.nodes.length} iş · öneren ${pl.from}`, w - 13).trimEnd() + ' ', '0;1');
+    for (let i = 1; i < h - 1; i++) { c.put(0, i, '┆', bs); c.put(w - 1, i, '┆', bs); }
+    c.put(0, h - 1, '╰' + '┄'.repeat(w - 2) + '╯', bs);
+    c.put(2, h - 1, ' ^b p onayla · ^b P reddet ', `0;1;${GOLD}`);
+
+    for (let r = 0; r < k; r++) {
+      for (const n of rows[r]) {
+        const col = fg(mix(rgbOf(prof(n)?.color) ?? [200, 200, 200], BG_RGB, 0.45));
+        const lines: Seg[][] = [[[n.id, `1;${col}`]], [[sub(n), DIM]]];
+        if (other(n).length) lines.push([['← ' + other(n).join(', '), DIM]]);
+        this.box(c, xOf.get(n.id)!, rowY[r], bw, bh, lines, { style: 'dash', color: col, bg: '', label: '', hit: { kind: 'agent', id: n.id }, joint: drawn(n).length ? ax(n.id) : undefined });
+        this.hits.pop();   // drawn on the panel's own canvas, and not an agent yet
+      }
+      if (!r || !lanes[r].length) continue;
+      const yb = rowY[r - 1] + bh - 1;   // the parents' bottom border
+      const deepest = new Map<string, number>();
+      lanes[r].forEach((n, j) => {
+        const ly = yb + 1 + j, ps = drawn(n), xs = [...ps.map(bx), ax(n.id)];
+        c.hline(ly, Math.min(...xs), Math.max(...xs));
+        for (const p of ps) deepest.set(p, Math.max(deepest.get(p) ?? 0, ly));
+        c.vline(ax(n.id), ly, rowY[r]);
+      });
+      for (const [p, ly] of deepest) { c.vline(bx(p), yb, ly); c.put(bx(p), yb, '┰', `0;${fg(mix(rgbOf(prof(pl.nodes.find((q) => q.id === p)!)?.color) ?? [200, 200, 200], BG_RGB, 0.45))}`); }
+      // straight through a lane it doesn't join (otherwise the crossing would read as a junction)
+      lanes[r].forEach((n, j) => {
+        const ly = yb + 1 + j, ps = drawn(n), xs = [...ps.map(bx), ax(n.id)];
+        const lo = Math.min(...xs), hi = Math.max(...xs);
+        const through = [
+          ...[...deepest].filter(([p, d]) => d > ly && !ps.includes(p)).map(([p]) => bx(p)),
+          ...lanes[r].slice(0, j).map((m) => ax(m.id)),
+        ];
+        for (const tx of through) if (tx > lo && tx < hi && !xs.includes(tx)) c.put(tx, ly, '┃', c.lineSgr);
+      });
+    }
+    let ty = end + 1;
+    if (hidden) c.segs(2, ty++, inner, [[`… +${hidden} iş daha (coban plan --show)`, DIM]], '', false);
+    warn.forEach((t, i) => c.segs(2, ty + i, inner, [[t, '1;38;5;203']], '', false));
+    this.planBox = { x, y, w, h };
+    return { c, x, y };
+  }
+
   composer(w: number): Canvas {
     const c = new Canvas(w, 2);
     const { to } = this.target();
@@ -1362,6 +1463,8 @@ export class Tui {
     if (!this.pending.length) this.showApprovals = false;
     const ap = !ov ? this.approvalsPanel(L, H) : undefined;
     if (!ap) this.approvalsBox = undefined;
+    const pp = !ov ? this.planPanel(L, H) : undefined;
+    if (!pp) this.planBox = undefined;
     const comp = this.composer(L.pw);
     const chatRow = (y: number, a: number, b: number) =>
       y === L.cy || y === L.cy + 1 ? comp.row(y - L.cy, a, b) : this.paneRow(focus, y - L.paneTop, L.P, L.pw, a, b);
@@ -1382,7 +1485,7 @@ export class Tui {
       return s;
     };
     const lines: string[] = [];
-    const overlays = [ov, bp, ap].filter((o): o is { c: Canvas; x: number; y: number } => !!o);
+    const overlays = [ov, bp, ap, pp].filter((o): o is { c: Canvas; x: number; y: number } => !!o);
     for (let y = 0; y < H - 1; y++) {
       // overlays covering this row, left to right; an overlay starting inside an earlier one is skipped
       const here = overlays.filter((o) => y >= o.y && y < o.y + o.c.h).sort((p, q) => p.x - q.x);
@@ -1481,9 +1584,10 @@ export class Tui {
     if (hub.confirms.length) left = ' ! ONAY GEREKİYOR · y onayla · n/esc reddet ';
     else if (this.mode === 'pick') left = ' ↑↓ / 1-9 seç · enter onayla · esc iptal ';
     else if (this.selectMode && !this.prefix) left = ' SEÇİM MODU · fareyle seç ve kopyala (⌘C) · çıkmak için ^b s ';
-    else if (this.prefix) left = ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
+    else if (this.prefix) left = (hub.plan ? ' ^b → p:planı onayla  P:planı reddet  ·' : '') + ' ^b → c:mesaj  y/a/r:izin  i:sıradaki  n:yeni  1-9:seç  j/k:gez  o:orkestra  m:kutu  l:konuşmalar  ←→:genişlik  s:kopyala  x:kapat  q:çık ';
+    else if (hub.plan) left = ` PLAN: ${hub.plan.title} · ${hub.plan.nodes.length} iş · ^b p onayla · ^b P reddet${hub.plan.warnings.length ? ` · ⚠ ${hub.plan.warnings.length} uyarı` : ''}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor` : ''} `;
     else left = ` ^b komut · ${hub.focus || '-'}${this.pending.length ? `  ! ${this.pending.length} izin bekliyor (^b y/a/r${this.geo?.mode === 'stack' ? ', ^b i' : ''})` : ''}${unreadBoard ? `  ▤${unreadBoard} ortak kutu (^b m)` : ''} `;
-    const bg = this.prefix || this.mode !== 'normal' || this.selectMode ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
+    const bg = this.prefix || this.mode !== 'normal' || this.selectMode || hub.plan ? '\x1b[0;30;48;5;214m' : '\x1b[0;38;5;250;48;5;235m';
     const right = this.notice ? ` ${this.notice} ` : '';
     const room = Math.max(0, w - right.length);
     if (room < 10) return `${bg}${fit(left, w)}\x1b[0m`;

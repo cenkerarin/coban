@@ -18,6 +18,11 @@ Agent'ların içinden (veya başka bir terminalden):
         [--after id1,id2]             kuyruğa al: bu agent'lar bitince (idle/exited, doğrulaması geçmiş) başlar
         [--worktree[=dal]]            ayrı git worktree'si (<repo>-<id>, dal coban/<id>) açıp işçiyi orada başlatır
         [--verify "<komut>"]          işçi durunca komutu cwd'sinde koşar; başarısızsa çıktının sonunu ona geri gönderir
+  coban plan <plan.json | ->          görev grafiğini kullanıcı onayına sunar (- = stdin; tek bekleyen plan, yenisi eskisinin yerine)
+                                      {"title":"…","nodes":[{"id","profile","task","after":[id],"files":[yol],"worktree":true|"dal","verify":"…","ctx":[yer]}]}
+                                      ctx görevin içine eklenir (--ctx gibi); files: aynı dosyayı sırasız yazan iki düğüm için uyarı
+  coban plan --show                   bekleyen planın tek satırlık özeti
+  coban plan --approve | --reject     (yalnız kullanıcı) bekleyen planı başlat / sil — arayüzde: ^b p / ^b P
   coban map [alt-dizin]               repo haritası: dosyalar, satır sayıları, semboller:satır
   coban send <id> "<mesaj>"           (post ile aynı)
   coban post <id|user|all> "<mesaj>"  all = ortak kutu (herkes görür)
@@ -50,7 +55,7 @@ const inAgent = () => 'COBAN_TOKEN' in process.env || 'COBAN_AGENT' in process.e
 // The hub knows callers by token only: an agent's own COBAN_TOKEN. A human's terminal has none; its privileged
 // requests (spawn/approve/key/kill/rule) wait for a "y" in the coban window.
 const token = () => process.env.COBAN_TOKEN ?? '';
-const NEEDS_CONFIRM = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm']);
+const NEEDS_CONFIRM = new Set(['spawn', 'approve', 'key', 'kill', 'merge', 'rule_add', 'rule_rm', 'plan_set', 'plan_approve', 'plan_reject']);
 
 function call(method: string, params: object): Promise<any> {
   return new Promise((resolve, reject) => {
@@ -71,7 +76,7 @@ function call(method: string, params: object): Promise<any> {
   });
 }
 
-const BOOL_FLAGS = ['scrollback', 'raw', 'json', 'worktree', 'rm-worktree', 'no-test', 'rm'];
+const BOOL_FLAGS = ['scrollback', 'raw', 'json', 'worktree', 'rm-worktree', 'no-test', 'rm', 'show', 'approve', 'reject'];
 
 function parse(argv: string[]) {
   const pos: string[] = [];
@@ -280,6 +285,30 @@ async function main() {
         : [u.profileId, `5s ${Math.round(u.pct5h * 100)}% (${tok(u.used5h)}/${tok(u.limit5h)})`, `7g ${tok(u.used7d)}`,
           u.resetAt ? `reset ${new Date(u.resetAt).toTimeString().slice(0, 5)}` : 'reset -', u.limited ? 'LİMİTLİ' : ''].filter(Boolean).join('  ');
       return print(r, () => r.usage.map(line).join('\n'));
+    }
+    case 'plan': {
+      if (flags.show) {
+        const r = await call('plan_show', {});
+        return print(r, () => (r.plan ? `PLAN: ${r.plan.summary} · öneren ${r.plan.from} · onay bekliyor` : '(bekleyen plan yok)'));
+      }
+      if (flags.approve || flags.reject) {
+        const r = await call(flags.approve ? 'plan_approve' : 'plan_reject', {});
+        return print(r, () => (flags.approve ? `plan onaylandı: ${r.title} · başladı: ${r.started.join(', ') || '-'}${r.queued.length ? ' · kuyrukta: ' + r.queued.join(', ') : ''}${r.failed.length ? ' · başlatılamadı: ' + r.failed.join('; ') : ''}` : `plan reddedildi: ${r.title}`));
+      }
+      if (!pos[0]) { console.error('kullanım: coban plan <plan.json | -> | --show | --approve | --reject'); process.exit(1); }
+      let plan: any;
+      try { plan = JSON.parse(fs.readFileSync(pos[0] === '-' ? 0 : pos[0], 'utf8')); }
+      catch (e: any) { throw new Error(`plan okunamadı (${pos[0] === '-' ? 'stdin' : pos[0]}): ${e.message}`); }
+      const cwd = process.cwd();
+      // ctx works like spawn --ctx: the code goes into the task text here, so the hub only ever sees plain tasks
+      for (const n of Array.isArray(plan?.nodes) ? plan.nodes : []) {
+        if (!n || typeof n !== 'object' || !Array.isArray(n.ctx) || !n.ctx.every((s: unknown) => typeof s === 'string')) continue;
+        if (typeof n.task === 'string' && n.task.trim()) n.task += snippets(n.ctx, cwd);
+        delete n.ctx;
+      }
+      const r = await call('plan_set', plan && typeof plan === 'object' && !Array.isArray(plan) ? { ...plan, cwd } : plan);
+      return print(r, () => [`plan gönderildi: ${r.title} · ${r.n} iş — kullanıcının onayı bekleniyor (coban wait)${r.replaced !== undefined ? ` · önceki plan ("${r.replaced}") yerine` : ''}`,
+        ...r.warnings.map((w: string) => `⚠ ${w}`)].join('\n'));
     }
     case 'map': console.log(repoMap(process.cwd(), pos[0] ?? '')); return;
     case 'help': case '-h': case '--help': console.log(HELP); return;
