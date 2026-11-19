@@ -3,6 +3,7 @@ import type { Hub } from './hub.ts';
 import { fmtTokens, type AccountUsage } from './usage.ts';
 import { pickOption, type Choice, type Prompt } from './prompt.ts';
 import { saveLayout } from './config.ts';
+import { McpWatch } from './mcp.ts';
 
 const PREFIX = '\x02'; // ctrl+b
 const out = process.stdout;
@@ -311,6 +312,9 @@ export class Tui {
   seen = new Map<string, Agent>();
   saidDone = new Set<string>();   // a "done" balloon was shown since the agent last started working
   lastWorkers: string[] = [];
+  mcp?: McpWatch; mcpKey = '';
+  mcpHits: { x: number; y: number; i: number }[] = [];
+  mcpHover = -1;
 
   constructor(hub: Hub) {
     this.hub = hub;
@@ -321,6 +325,7 @@ export class Tui {
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
+    setInterval(() => { if (this.mcp?.refresh()) this.schedule(); }, 30_000).unref?.();   // MCP config: re-stat every 30s, redraw only on change
     hub.on('handoff', (h: { from: string; to: string | null; fromProfile: string; toProfile: string | null }) => {
       if (h.to) this.event(h.to, '⇄', STATUS_STYLE.limited[1], `devir: ${h.from} (${h.fromProfile}) → ${h.toProfile}`);
       else this.event(h.from, '⇄', STATUS_STYLE.limited[1], `devir yapılamadı${h.toProfile ? ` (${h.toProfile})` : ': uygun hesap yok'}`);
@@ -712,6 +717,11 @@ export class Tui {
 
     const L = this.geo;
     if (!L) return;
+    if (motion || press) {   // MCP circle tooltip
+      const gx = x - L.gx;
+      const mi = (L.mode === 'cols' ? x >= L.gx && x < L.gx + L.gw : y < L.paneTop) ? (this.mcpHits.find((r) => r.y === y && gx >= r.x && gx < r.x + 3)?.i ?? -1) : -1;
+      if (mi !== this.mcpHover) { this.mcpHover = mi; this.schedule(); }
+    }
     // borders: hover highlights, press + drag resizes live, release saves
     if (L.mode === 'cols' && !wheel) {
       const W = L.px + L.pw, sepFeed = L.fw ? L.fx + L.fw : -1, sepChat = L.px - 1;
@@ -909,6 +919,41 @@ export class Tui {
     return p;
   }
 
+  // MCP servers of the orchestrator's profile as small letter circles above its node (static check, see mcp.ts)
+  mcpDots(c: Canvas, orch: Agent | undefined, W: number, cx: number, top: number, ox: number, ow: number) {
+    this.mcpHits = [];
+    const dir = orch?.profile.env?.CLAUDE_CONFIG_DIR ?? '', cwd = orch?.cwd;
+    if (!orch || !cwd || W < 30) { this.mcp = undefined; this.mcpKey = ''; return; }
+    const key = `${dir}\0${cwd}`;
+    if (!this.mcp || key !== this.mcpKey) { this.mcp = new McpWatch(dir, cwd); this.mcpKey = key; this.mcp.refresh(); }
+    const list = this.mcp.servers;
+    if (!list.length) return;
+    const onBorder = top < 1, y = onBorder ? top : top - 1;
+    const avail = onBorder ? ow - 4 : W - 2;
+    const cap = Math.min(6, Math.floor((avail + 1) / 4));
+    if (cap < 1) return;
+    const over = list.length > cap, shown = over ? list.slice(0, Math.max(1, cap - 1)) : list;
+    const extra = list.length - shown.length;
+    const tw = shown.length * 4 - 1 + (extra ? 3 + String(extra).length : 0);
+    let x = clamp(cx - Math.floor(tw / 2), onBorder ? ox + 2 : 0, W - tw);
+    const x0 = x;
+    shown.forEach((m, i) => {
+      const col = !this.anim ? '0' : m.ok ? `0;${MARK}` : m.reason === 'disabled' ? `0;${DIM}` : '0;38;5;203';
+      const ch = !this.anim && !m.ok ? '!' : ([...m.name.replace(/^[^a-z0-9]+/i, '')][0] ?? '?').toUpperCase();
+      c.put(x, y, `(${ch})`, i === this.mcpHover ? col.replace(/^0/, '1') : col);
+      this.mcpHits.push({ x, y, i });
+      x += 4;
+    });
+    if (extra) c.put(x, y, `+${extra}`, `0;${DIM}`);
+    const hv = list[this.mcpHover];
+    if (hv && this.mcpHover < shown.length) {
+      const tip = ` ${hv.name} · ${hv.ok ? 'aktif' : hv.reason} `;
+      const tx = x0 + tw + 1;
+      if (tx + tip.length <= W) c.put(tx, y, tip, '0;38;5;250');
+      else c.put(Math.max(0, x0 - tip.length - 1), y, tip, '0;38;5;250');
+    }
+  }
+
   graph(W: number, p: Plan, full: boolean): Canvas {
     const hub = this.hub;
     const c = new Canvas(W, p.G + 1);
@@ -932,6 +977,7 @@ export class Tui {
       label: orch ? num(orch.id) : '', hit: orch ? { kind: 'agent', id: orch.id } : { kind: 'add-orch' },
     });
     this.orchJoint = [cx, top + p.bh - 1];
+    this.mcpDots(c, orch, W, cx, top, ox, ow);
 
     if (p.rows && p.items.length) {
       c.put(cx, top + p.bh - 1, '╤', `0;${ofocus ? '1;' : ''}${GOLD}`);
