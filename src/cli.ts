@@ -36,6 +36,7 @@ Agent'ların içinden (veya başka bir terminalden):
   coban usage                         hesap kullanımı (5s %, 7g token, reset), en az harcayan başta
   coban log [--limit n]
   coban history [--limit n]           kalıcı oturum geçmişi (olaylar + mesajlar, ~/.coban/history.jsonl)
+  coban export [--out dosya.md]         geçmişi Markdown rapora çevirir (zaman çizelgesi, işçi tablosu, kararlar)
   coban account add                   yeni Claude hesabı ekle: giriş yaptırır, profili config'e yazar (arayüz kapalıyken)
 
 spawn/approve/key/kill/rule agent dışından (bu terminalden) çalıştırılınca coban penceresinde onay ister: y onayla, n reddet.
@@ -250,6 +251,12 @@ async function main() {
       return print(r, () => (r.history.length ? r.history.map((e: any) => e.kind === 'msg'
         ? `${hhmm(e.ts)} ${e.id}→${e.to}: ${one(e.text)}`
         : `${hhmm(e.ts)} ${e.id}: ${one(e.text)}${e.detail ? ' — ' + one(e.detail) : ''}`).join('\n') : '(geçmiş boş)'));
+    }
+    case 'export': {
+      const { exportReport } = await import('./export.ts');
+      const md = exportReport();
+      if (typeof flags.out === 'string') { fs.writeFileSync(flags.out, md); console.log(`rapor yazıldı: ${flags.out}`); } else process.stdout.write(md);
+      return;
     }
     case 'usage': {
       // Works without a running coban too (then 'limited' is unknown → false).
