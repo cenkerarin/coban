@@ -49,10 +49,26 @@ const SAVE_DEBOUNCE_MS = 300;
 // A config value may be anything: non-numbers fall back to the default, numbers are clamped.
 const sanitizeShare = (v: unknown) => typeof v === 'number' && Number.isFinite(v) ? clamp(v, CHAT_SHARE_MIN, CHAT_SHARE_MAX) : CHAT_SHARE;
 const RESIZE_REPEAT_MS = 1000;
+export const FEED_MIN = 30, FEED_MAX = 70, FEED_STEP = 4, GRAPH_MIN = 40;
+const sanitizeFeedShare = (v: unknown) => typeof v === 'number' && Number.isFinite(v) && v > 0 && v < 1 ? v : undefined;   // columnWidths clamps to FEED_MIN..FEED_MAX cols
+
+// Dragging a border: `x` is the 0-based screen column of the pointer. Both return the new share, clamped so that
+// every column keeps its minimum width (chat 0.3-0.6, feed 30-70 cols, graph >= 40 cols).
+export function dragChatShare(W: number, x: number): number {
+  return sanitizeShare(Math.round((W - 1 - x) / W * 100) / 100);
+}
+export function dragFeedShare(W: number, x: number, chatShare: number): number {
+  const pw = clamp(Math.round(W * chatShare), 64, 130);
+  const maxFw = Math.max(FEED_MIN, Math.min(FEED_MAX, W - pw - 2 - GRAPH_MIN));
+  return clamp(x, FEED_MIN, maxFw) / W;
+}
 
 // The chat takes `share` of the screen; the feed gives up room in proportion so the graph isn't the only one squeezed.
-export function columnWidths(W: number, share: number, feedHidden: boolean) {
-  let fw = feedHidden || W < 140 ? 0 : clamp(Math.round(W * 0.24 * (1 - share) / (1 - CHAT_SHARE)), 30, 56);
+// `feedShare` (fraction of W, set by dragging the feed↔graph border) overrides the automatic feed width.
+export function columnWidths(W: number, share: number, feedHidden: boolean, feedShare?: number) {
+  let fw = feedHidden || W < 140 ? 0
+    : feedShare === undefined ? clamp(Math.round(W * 0.24 * (1 - share) / (1 - CHAT_SHARE)), 30, 56)
+    : clamp(Math.round(W * feedShare), FEED_MIN, FEED_MAX);
   let pw = clamp(Math.round(W * share), 64, 130);
   let gw = W - fw - pw - (fw ? 2 : 1);
   if (gw < 40) { const t = Math.min(40 - gw, pw - 60); pw -= t; gw += t; }
@@ -253,6 +269,9 @@ export class Tui {
   showBoard = false;
   feedHidden = false;   // restored from the config in the constructor
   chatShare = CHAT_SHARE;
+  feedShare?: number;   // undefined = automatic feed width
+  drag?: 'feed' | 'chat';        // border being dragged with the mouse
+  hover?: 'feed' | 'chat';       // border under the pointer (highlighted)
   saveTimer?: NodeJS.Timeout;
   resizeUntil = 0; // until then, left/right arrows keep resizing without ^b
   selectMode = false;  // mouse released to the terminal so text can be selected/copied
@@ -298,6 +317,7 @@ export class Tui {
     hub.confirmUI = true;   // anon socket requests for user rights now come here for a y/n
     this.chatShare = sanitizeShare(hub.cfg.chatWidth);
     this.feedHidden = hub.cfg.feedHidden === true;
+    this.feedShare = sanitizeFeedShare(hub.cfg.feedWidth);
     hub.on('render', (a: Agent) => { if (a.id === hub.focus) this.schedule(); });
     hub.on('change', () => { this.observe(); this.schedule(); });
     hub.on('board', () => this.schedule());
@@ -524,6 +544,9 @@ export class Tui {
       case 'l': this.feedHidden = !this.feedHidden; this.saveSoon(); this.prev = []; out.write('\x1b[2J'); break;
       case '<': case '\x1b[D': case '\x1bOD': this.resizeChat(CHAT_SHARE_STEP); break;
       case '>': case '\x1b[C': case '\x1bOC': this.resizeChat(-CHAT_SHARE_STEP); break;
+      case '[': this.resizeFeed(-FEED_STEP); break;
+      case ']': this.resizeFeed(FEED_STEP); break;
+      case '=': this.chatShare = CHAT_SHARE; this.feedShare = undefined; this.saveSoon(); this.prev = []; out.write('\x1b[2J'); break;
       case 's': this.selectMode = !this.selectMode; break;
       case 'c': this.composing = !this.composing; break;
       case 'y': this.answerSelected('yes'); break;
@@ -554,7 +577,7 @@ export class Tui {
     if (!this.saveTimer) return;
     clearTimeout(this.saveTimer);
     this.saveTimer = undefined;
-    try { saveLayout({ chatWidth: this.chatShare, feedHidden: this.feedHidden }); } catch { /* an unwritable config must not crash the TUI */ }
+    try { saveLayout({ chatWidth: this.chatShare, feedHidden: this.feedHidden, feedWidth: this.feedShare ?? null }); } catch { /* an unwritable config must not crash the TUI */ }
   }
 
   saveSoon() {
@@ -568,6 +591,15 @@ export class Tui {
     this.chatShare = sanitizeShare(Math.round((this.chatShare + delta) * 100) / 100);
     this.saveSoon();
     this.resizeUntil = Date.now() + RESIZE_REPEAT_MS;
+    this.prev = [];
+    out.write('\x1b[2J');
+  }
+
+  resizeFeed(delta: number) {
+    const L = this.geo;
+    if (!L || L.mode === 'stack' || !L.fw) return;
+    this.feedShare = dragFeedShare(L.fx + L.fw + L.gw + L.pw + 2, L.fw + delta, this.chatShare);
+    this.saveSoon();
     this.prev = [];
     out.write('\x1b[2J');
   }
@@ -680,6 +712,24 @@ export class Tui {
 
     const L = this.geo;
     if (!L) return;
+    // borders: hover highlights, press + drag resizes live, release saves
+    if (L.mode === 'cols' && !wheel) {
+      const W = L.px + L.pw, sepFeed = L.fw ? L.fx + L.fw : -1, sepChat = L.px - 1;
+      const onSep = y < L.cy + 2 ? (x === sepFeed ? 'feed' : x === sepChat ? 'chat' : undefined) : undefined;
+      if (!press && !motion) { if (this.drag) { this.drag = undefined; this.saveSoon(); this.schedule(); } return; }   // release
+      if (this.drag) {
+        if (motion) {
+          if (this.drag === 'chat') this.chatShare = dragChatShare(W, x);
+          else this.feedShare = dragFeedShare(W, x, this.chatShare);
+          this.prev = [];
+          this.schedule();
+        }
+        return;
+      }
+      if (click && onSep) { this.drag = onSep; this.hover = onSep; this.schedule(); return; }
+      if (motion && btn === 3 && this.hover !== onSep) { this.hover = onSep; this.schedule(); }
+      if (onSep) return;
+    }
     // feed column: wheel scrolls history
     if (L.fw && x >= L.fx && x < L.fx + L.fw) {
       if (wheel) { this.feedScroll = Math.max(0, this.feedScroll + (btn === 0 ? 3 : -3)); this.schedule(); }
@@ -702,6 +752,8 @@ export class Tui {
     const a = this.hub.agents.get(this.hub.focus);
     const row = y - L.paneTop, col = x - L.px;
     if (!a || a.exitCode !== null || row < 0 || row >= L.P || col < 0 || col >= L.pw || a.term.modes.mouseTrackingMode === 'none') return;
+    const tm = a.term.modes.mouseTrackingMode;
+    if (motion && (tm === 'vt200' || tm === 'x10' || (tm === 'drag' && btn === 3))) return;   // we ask for motion ourselves (hover); only forward what the agent wants
     const ms = (a.term as any)._core?.coreMouseService;
     if (!ms) return;
     let button: number, action: number;
@@ -719,7 +771,7 @@ export class Tui {
       const P = Math.max(1, H - p.G - 4);
       return { mode: 'stack', fx: 0, fw: 0, gx: 0, gw: W, px: 0, pw: W, paneTop: p.G + 1, P, cy: p.G + 1 + P, p };
     }
-    const { fw, gw, pw } = columnWidths(W, this.chatShare, this.feedHidden);
+    const { fw, gw, pw } = columnWidths(W, this.chatShare, this.feedHidden, this.feedShare);
     const gx = fw ? fw + 1 : 0;
     return { mode: 'cols', fx: 0, fw, gx, gw, px: gx + gw + 1, pw, paneTop: 1, P: Hb - 3, cy: Hb - 2, p: this.plan(gw, Hb, true) };
   }
@@ -1272,8 +1324,9 @@ export class Tui {
     const base = (y: number, x0: number, x1: number): string => {
       if (!full) return y <= L.p.G ? graph.row(y, x0, x1) : chatRow(y, x0, x1);
       const cols: [number, number, (a: number, b: number) => string][] = [];
-      if (feed) cols.push([L.fx, L.fw, (a, b) => feed.row(y, a, b)], [L.fx + L.fw, 1, () => `\x1b[${SEP}m│\x1b[0m`]);
-      cols.push([L.gx, L.gw, (a, b) => graph.row(y, a, b)], [L.gx + L.gw, 1, () => `\x1b[${SEP}m│\x1b[0m`]);
+      const sep = (which: 'feed' | 'chat') => () => this.hover === which || this.drag === which ? `\x1b[1;38;5;75m┃\x1b[0m` : `\x1b[${SEP}m│\x1b[0m`;
+      if (feed) cols.push([L.fx, L.fw, (a, b) => feed.row(y, a, b)], [L.fx + L.fw, 1, sep('feed')]);
+      cols.push([L.gx, L.gw, (a, b) => graph.row(y, a, b)], [L.gx + L.gw, 1, sep('chat')]);
       cols.push([L.px, L.pw, (a, b) => (y === 0 ? head!.row(0, a, b) : chatRow(y, a, b))]);
       let s = '';
       for (const [cx, cw, fn] of cols) {
@@ -1306,7 +1359,7 @@ export class Tui {
     // outer mouse mode: always clicks (1000) in SGR (1006); motion only if the focused agent wants it
     const want = focus?.term.modes.mouseTrackingMode;
     const mouse = this.selectMode ? '\x1b[?1000l\x1b[?1006l'
-      : '\x1b[?1000h\x1b[?1006h' + (want === 'drag' ? '\x1b[?1002h' : want === 'any' ? '\x1b[?1003h' : '');
+      : '\x1b[?1000h\x1b[?1006h' + (this.geo?.mode === 'cols' || want === 'any' ? '\x1b[?1003h' : want === 'drag' ? '\x1b[?1002h' : '');
     if (mouse !== this.outerMouse) { buf += '\x1b[?1002l\x1b[?1003l' + mouse; this.outerMouse = mouse; }
 
     if (focus) {

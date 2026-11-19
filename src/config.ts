@@ -22,6 +22,7 @@ export type Config = {
   stuckMinutes?: number;         // watchdog: a 'working' worker whose screen hasn't changed this long is reported as stuck (default 8, 0 = off)
   notify?: boolean;              // macOS notification when a worker waits for permission or hits a limit (default true)
   chatWidth?: number;            // chat column's share of the screen, 0.3-0.6; ^b ←/→ (or < / >) change and save it
+  feedWidth?: number | null;     // feed column's share of the screen (30-70 cols); set by dragging the feed↔graph border or ^b [ / ]; absent = automatic
   feedHidden?: boolean;          // feed column hidden (^b l); saved so the panel layout survives restarts
   rules?: ApprovalRule[];        // standing approvals, see `coban rule`; none by default
   verifyAllow?: string[];        // spawn --verify: when set, only commands fully matching one of these regexes may run
@@ -66,9 +67,10 @@ export function nextAccount(cfg: Config): { profile: Profile; dir: string } {
   return { profile: claude(n, SONNET, COLORS[(n - 1) % COLORS.length]), dir: path.join(os.homedir(), `.claude-hesap${n}`) };
 }
 
-export function saveLayout(patch: Pick<Config, 'chatWidth' | 'feedHidden'>) {
+export function saveLayout(patch: Partial<Pick<Config, 'chatWidth' | 'feedHidden' | 'feedWidth'>>) {
   const raw = JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8')) as Config;   // raw file: keep `~` paths unexpanded
   Object.assign(raw, patch);
+  if (raw.feedWidth == null) delete raw.feedWidth;   // null/undefined = back to automatic
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(raw, null, 2) + '\n');
 }
 export const saveChatWidth = (share: number) => saveLayout({ chatWidth: share });
